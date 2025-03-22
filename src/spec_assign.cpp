@@ -69,7 +69,7 @@ struct teach_data teachers[] = {
                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, "After about an hour of shuffling slides you feel you can now do "
                          "your job safer.\r\n", ADVANCED },
                        { 1006, { SKILL_INTIMIDATION, SKILL_INTERROGATION, SKILL_LEADERSHIP, SKILL_SURVIVAL, SKILL_LEGERDEMAIN,
-                         SKILL_TRACK, SKILL_DISGUISE, SKILL_SMALL_UNIT_TACTICS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, "After about an hour of shuffling slides you "
+                         SKILL_DISGUISE, SKILL_SMALL_UNIT_TACTICS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, "After about an hour of shuffling slides you "
                          "feel you can now do your job safer.\r\n", ADVANCED },
                        { 1007, { SKILL_ANIMAL_HANDLING, SKILL_ANIMAL_TAMING, SKILL_CHEMISTRY, SKILL_PHARMA,
                          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, "After about an hour of shuffling slides you feel you can now do your job safer.\r\n", ADVANCED },
@@ -152,6 +152,11 @@ struct teach_data teachers[] = {
   { 60501, { SKILL_CONJURING, SKILL_SORCERY, SKILL_SPELLDESIGN, SKILL_AURA_READING,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     "After hours of study and practice, you feel like you've learned something.\r\n", NEWBIE },
+  
+  // Newbie otaku teacher
+  { 60692, {  SKILL_CHANNEL_ACCESS, SKILL_CHANNEL_CONTROL, SKILL_CHANNEL_INDEX, SKILL_CHANNEL_FILES, SKILL_CHANNEL_SLAVE,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    "After hours of study and practice, you feel like you've learned something.\r\n", NEWBIE },
 
   { 60502, { SKILL_COMPUTER, SKILL_BR_COMPUTER, SKILL_DATA_BROKERAGE, SKILL_CYBERTERM_DESIGN, SKILL_ELECTRONICS,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
@@ -196,6 +201,18 @@ struct teach_data teachers[] = {
   { 60534, { SKILL_ATHLETICS, SKILL_BIOTECH, SKILL_STEALTH, SKILL_MEDICINE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     "Steve roughly throws you a text book and tells you to read it, you feel like you've learned something.\r\n", NEWBIE},
   // End newbie teachers.
+
+#ifdef USE_PRIVATE_CE_WORLD
+  // Skill-8 otaku teacher
+  { 5003, {  SKILL_CHANNEL_ACCESS, SKILL_CHANNEL_CONTROL, SKILL_CHANNEL_INDEX, SKILL_CHANNEL_FILES, SKILL_CHANNEL_SLAVE,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    "After hours of study and practice, you feel like you've learned something.\r\n", AMATEUR },
+
+  // Skill-12 otaku teacher
+  { 792, {  SKILL_CHANNEL_ACCESS, SKILL_CHANNEL_CONTROL, SKILL_CHANNEL_INDEX, SKILL_CHANNEL_FILES, SKILL_CHANNEL_SLAVE,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    "After hours of study and practice, you feel like you've learned something.\r\n", ADVANCED },
+#endif
 
    { 30700, { SKILL_ARABIC, SKILL_CANTONESE, SKILL_CROW, SKILL_ENGLISH, SKILL_FRENCH, SKILL_GAELIC, SKILL_GERMAN,
      SKILL_ITALIAN, SKILL_JAPANESE, SKILL_KOREAN, SKILL_LATIN, SKILL_MAKAW, SKILL_NAVAJO, SKILL_ORZET,
@@ -654,9 +671,10 @@ void assign_mobiles(void)
   ASSIGNMOB(31135, graffiti_cleaner);
   ASSIGNMOB(6902, soulbound_unbinder);
 
-
+  SPECIAL(cas_gatekeeper);
   SPECIAL(grenada_gatekeeper);
 
+  ASSIGNMOB(101259, cas_gatekeeper);
   ASSIGNMOB(101310, grenada_gatekeeper);
   ASSIGNMOB(101311, grenada_gatekeeper);
   ASSIGNMOB(101312, grenada_gatekeeper);
@@ -693,6 +711,7 @@ void assign_mobiles(void)
   ASSIGNMOB(650, taxi);
   #ifdef USE_PRIVATE_CE_WORLD
   ASSIGNMOB(640, taxi);
+  ASSIGNMOB(101600, taxi);
   #endif
 
   /* Immortal HQ */
@@ -1015,6 +1034,7 @@ void assign_objects(void)
   ASSIGNOBJ(OBJ_SEATTLE_TAXI_SIGN, taxi_sign);
   ASSIGNOBJ(OBJ_PORTLAND_TAXI_SIGN, taxi_sign);
   ASSIGNOBJ(OBJ_CARIBBEAN_TAXI_SIGN, taxi_sign);
+  ASSIGNOBJ(OBJ_CAS_TAXI_SIGN, taxi_sign);
 
   ASSIGNOBJ(10005, weapon_dominator);
 
@@ -1167,6 +1187,7 @@ void assign_rooms(void)
 
   // CAS dealers.
   ASSIGNROOM(100998, car_dealer);
+  ASSIGNROOM(101239, car_dealer);
 #endif
 
   /* Mitsuhama */

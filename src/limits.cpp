@@ -54,6 +54,7 @@ extern int get_paydata_market_maximum(int host_color);
 extern int get_paydata_market_minimum(int host_color);
 extern void save_shop_orders();
 extern bool docwagon(struct char_data *ch);
+extern struct time_info_data time_info;
 
 void mental_gain(struct char_data * ch)
 {
@@ -65,7 +66,7 @@ void mental_gain(struct char_data * ch)
   }
 
   // Can't regenerate? Skip.
-  if (IS_NPC(ch) && GET_DEFAULT_POS(ch) <= POS_STUNNED) {
+  if (IS_NPC(ch) && GET_DEFAULT_POS(ch) == POS_STUNNED) {
     return;
   }
 
@@ -284,10 +285,19 @@ char* get_new_kosherized_title(const char *title, unsigned short max_length) {
   return mutable_title;
 }
 
-void set_title(struct char_data * ch, const char *title)
+void set_title(struct char_data * ch, const char *title, bool save_to_db)
 {
   DELETE_ARRAY_IF_EXTANT(GET_TITLE(ch));
   GET_TITLE(ch) = get_new_kosherized_title(title, MAX_TITLE_LENGTH);
+
+  if (save_to_db) {
+    char query_buf[MAX_INPUT_LENGTH];
+    char prepare_quotes_buf[MAX_INPUT_LENGTH];
+    snprintf(query_buf, sizeof(query_buf),
+            "UPDATE pfiles SET Title='%s' WHERE idnum=%ld;",
+            prepare_quotes(prepare_quotes_buf, GET_TITLE(ch), sizeof(prepare_quotes_buf) / sizeof(prepare_quotes_buf[0])), GET_IDNUM(ch));
+    mysql_wrapper(mysql, query_buf);
+  }
 }
 
 
@@ -1238,6 +1248,11 @@ void point_update(void)
             LAST_HEAL(i)++;
           if (GET_EQ(i, WEAR_PATCH) && GET_OBJ_TYPE(GET_EQ(i, WEAR_PATCH)) == ITEM_PATCH && --GET_PATCH_TICKS_LEFT(GET_EQ(i, WEAR_PATCH)) <= 0)
             remove_patch(i);
+        }
+
+        // Clear their assense records on every MUD day.
+        if (time_info.hours == 0) {
+          i->assense_recency.clear();
         }
       }
 

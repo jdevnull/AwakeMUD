@@ -779,12 +779,10 @@ char *str_dup(const char *source)
   if (!source)
     return NULL;
 
-  char *New = new char[strlen(source) + 2];
+  size_t newlen = strlen(source) + 2;
+  char *New = new char[newlen];
 
-  // This shouldn't be needed, but just in case.
-  // memset(New, 0, sizeof(char) * (strlen(source) + 1));
-
-  strncpy(New, source, strlen(source) + 1);
+  strlcpy(New, source, newlen);
   return New;
 }
 
@@ -2083,6 +2081,28 @@ int get_num_of_cyber_replacements(struct char_data *ch) {
   }
 
   return total;
+}
+
+int get_attr_max(struct char_data *ch, int attr) {
+  int racial_max = racial_limits[(int) GET_RACE(ch)][RACIAL_LIMITS_NORMAL][attr];
+
+  // Otaku attributes are modified. Matrix 3; pg.136
+  if (IS_OTAKU(ch)) {
+    switch (attr) {
+      case BOD:
+      case QUI:
+      case STR:
+        racial_max -= 1;
+        break;
+      case WIL:
+      case CHA:
+      case INT:
+        racial_max += 1;
+        break;
+    }
+  }
+
+  return MAX(1, racial_max);
 }
 
 #define INCOMPATIBLE_BIO(biotype, message) { if (GET_BIOWARE_TYPE(bio1) == biotype) { send_to_char(ch, "%s\r\n", message); return FALSE; } }
@@ -8244,4 +8264,54 @@ bool restore_to_full_health_if_still_in_chargen(struct char_data *victim) {
   mudlog_vfprintf(victim, LOG_CHEATLOG, "Restoring %s to full health (stunned/morted in chargen).", GET_CHAR_NAME(victim));
 
   return TRUE;
+}
+
+char *format_for_logging__returns_new(const char *input) {
+  size_t result_sz = strlen(input) + 2;
+  char *result = new char[result_sz];
+  memset(result, 0, result_sz);
+
+  for (size_t read_idx = 0, write_idx = 0; read_idx < strlen(input); read_idx++) {
+    if (input[read_idx] == '\r' || input[read_idx] == '\n') {
+      result[write_idx++] = ' ';
+    } else {
+      result[write_idx++] = input[read_idx];
+    }
+  }
+
+  return result;
+}
+
+int calculate_ware_essence_or_index_cost(struct char_data *ch, struct obj_data *ware) {
+  if (!ware || !ch) {
+    mudlog_vfprintf(ch, LOG_SYSLOG, "SYSERR: Got invalid parameter to calculate_ware_essence_or_index_cost(%s, %s)!", GET_CHAR_NAME(ch), GET_OBJ_NAME(ware));
+    return 99999;
+  }
+
+  if (GET_OBJ_TYPE(ware) == ITEM_CYBERWARE) {
+    int esscost = GET_CYBERWARE_ESSENCE_COST_RO(ware);
+
+    // Ghouls and drakes have doubled cyberware essence costs.
+    if (IS_GHOUL(ch) || IS_DRAKE(ch))
+      esscost *= 2;
+
+    // Eagle Shamans have doubled essence costs.
+    if (GET_TRADITION(ch) == TRAD_SHAMANIC && GET_TOTEM(ch) == TOTEM_EAGLE)
+      esscost *= 2;
+
+    return esscost;
+  }
+  
+  else if (GET_OBJ_TYPE(ware) == ITEM_BIOWARE) {
+    int indexcost = GET_BIOWARE_ESSENCE_COST(ware);
+
+    // Ghouls and drakes have doubled bioware index costs.
+    if (IS_GHOUL(ch) || IS_DRAKE(ch))
+      indexcost *= 2;
+    
+    return indexcost;
+  }
+  
+  mudlog_vfprintf(ch, LOG_SYSLOG, "SYSERR: Got non-ware item to calculate_ware_essence_or_index_cost(%s, %s)!", GET_CHAR_NAME(ch), GET_OBJ_NAME(ware));
+  return 99999;
 }

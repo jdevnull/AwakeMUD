@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <vector>
+#include <unordered_map>
 
 #include "structs.hpp"
 #include "awake.hpp"
@@ -31,6 +32,8 @@
 #include "config.hpp"
 #include "deck_build.hpp"
 #include "vehicles.hpp"
+#include "player_exdescs.hpp"
+#include "otaku.hpp"
 
 /* external functions */
 extern void stop_fighting(struct char_data * ch);
@@ -54,6 +57,8 @@ void _char_with_spell_to_room(struct char_data *ch, int spell_num, room_spell_t 
 void _char_with_spell_from_room(struct char_data *ch, int spell_num, room_spell_t *room_spell_tracker);
 
 struct obj_data *find_obj(struct char_data *ch, char *name, int num);
+
+extern std::unordered_map<idnum_t, int> global_graffiti_count;
 
 char *fname(char *namelist)
 {
@@ -774,7 +779,7 @@ void affect_total(struct char_data * ch)
     }
   }
 
-  // has_trigger was initialized to -1, why not initialize to 0 and not check for has_trigger?
+  // has_trigger is -1 when trigger doesn't exist, or else 0-3 depending on setting
   if (has_wired && has_trigger) {
     has_wired = MIN(has_wired, (has_trigger == -1 ? 3 : has_trigger));
     GET_INIT_DICE(ch) += has_wired;
@@ -863,6 +868,14 @@ void affect_total(struct char_data * ch)
 
   apply_drug_modifiers_to_ch(ch);
 
+  // Part of the otaku simulation; modifies otaku attributes depending on drugs, cyber, etc.
+  if (ch->persona 
+    && ch->persona->type == ICON_LIVING_PERSONA
+    && ch->persona->decker
+    && ch->persona->decker->deck) {
+    update_otaku_deck(ch, ch->persona->decker->deck);
+  }
+
   rigger_rea += GET_REA(ch);
   rigger_init_dice += GET_INIT_DICE(ch);
 
@@ -874,7 +887,7 @@ void affect_total(struct char_data * ch)
     GET_ATT(ch, att) = MAX(1, GET_ATT(ch, att));
 
     // Set the cap to the higher of existing cap or racial maximum (only impacts dragons)
-    int per_att_cap = MAX(cap, racial_limits[(int) GET_RACE(ch)][RACIAL_LIMITS_NORMAL][att]);
+    int per_att_cap = MAX(cap, get_attr_max(ch, att));
 
     // Apply the soft cap to anything exceeding it.
     if (GET_ATT(ch, att) > per_att_cap)
@@ -1115,14 +1128,18 @@ void affect_total(struct char_data * ch)
 
   if (REAL_SKILL(ch, SKILL_COMPUTER) > 0)
   {
+    // a VCR applies a -rating hacking pool, unless disabled via reflex trigger (Matrix, pg 28)
+    // assume trigger is attached to VCR and that a rigger will always disable their VCR when decking
+    if (has_rig && (has_trigger == -1)) {
+      GET_HACKING(ch) -= has_rig;
+    }
+
     int mpcp = 0;
     if (PLR_FLAGGED(ch, PLR_MATRIX) && ch->persona) {
       GET_HACKING(ch) += (int)((GET_INT(ch) + ch->persona->decker->mpcp) / 3);
-      // a VCR applies a 1 TN penalty to decking and -rating hacking pool, unless disabled via reflex trigger (Matrix, pg 28)
-      // assume trigger is attached to VCR and that a rigger will always disable their VCR when decking
+      // when in the matrix, a VCR also applies a 1 TN penalty, unless disabled via reflex trigger (Matrix, pg 28)
       if (has_rig && (has_trigger == -1)) {
         GET_TARGET_MOD(ch) += 1;
-        GET_HACKING(ch) -= has_rig;
       }
     } else {
       for (struct obj_data *deck = ch->carrying; deck; deck = deck->next_content)
@@ -1878,6 +1895,12 @@ bool equip_char(struct char_data * ch, struct obj_data * obj, int pos, bool reca
   if (recalc) {
     affect_total(ch);
   }
+
+  // Equipping is easy, just shadow it all.
+  if (ch->player_specials) {
+    GET_CHAR_COVERED_WEARLOCS(ch).SetBit(obj->worn_on);
+  }
+  
   calc_weight(ch);
   return TRUE;
 }
@@ -1895,6 +1918,11 @@ struct obj_data *unequip_char(struct char_data * ch, int pos, bool focus, bool r
   if (!GET_EQ(ch, pos)) {
     mudlog_vfprintf(ch, LOG_SYSLOG, "SYSERR: Trying to remove non-existent item from %s at %d", GET_CHAR_NAME(ch), pos);
     return NULL;
+  }
+
+  // Remove the bit that this is worn on from our covered_wearlocs set.
+  if (ch->player_specials) {
+    GET_CHAR_COVERED_WEARLOCS(ch).RemoveBit(GET_EQ(ch, pos)->worn_on);
   }
 
   obj = GET_EQ(ch, pos);
@@ -1938,6 +1966,7 @@ struct obj_data *unequip_char(struct char_data * ch, int pos, bool focus, bool r
   if (recalc) {
     affect_total(ch);
   }
+
   calc_weight(ch);
   return (obj);
 }
@@ -2005,20 +2034,45 @@ struct obj_data *get_obj_in_list_num(int num, struct obj_data * list)
   return NULL;
 }
 
-int vnum_from_non_connected_zone(int vnum)
+bool vnum_from_non_approved_zone(vnum_t vnum)
 {
-  int counter;
-  if (vnum == -1)  // obj made using create_obj, like mail and corpses
-    return 0;
+  // -1 means it was made with create_obj, like mail and corpses. Treat as always connected.
+  if (vnum == -1)
+    return FALSE;
+
+  // Invalid vnums are always treated as non-connected.
   else if (vnum < 0 || vnum > (zone_table[top_of_zone_table].top))
-    return 1;
+    return TRUE;
 
-  for (counter = 0; counter <= top_of_zone_table; counter++)
-    if (!(zone_table[counter].connected) && vnum >= (zone_table[counter].number * 100) &&
-        vnum <= zone_table[counter].top)
-      return 1;
+  for (int zone_idx = 0; zone_idx <= top_of_zone_table; zone_idx++) {
+    if (vnum >= (zone_table[zone_idx].number * 100) && vnum <= zone_table[zone_idx].top)
+      return !zone_table[zone_idx].approved;
+  }
 
-  return 0;
+  // We should never get here.
+  mudlog_vfprintf(NULL, LOG_SYSLOG, "SYSERR: Got to 'unreachable' end of vnum_from_non_approved_zone(%ld).", vnum);
+  return FALSE;
+}
+
+bool vnum_from_editing_restricted_zone(vnum_t vnum)
+{
+  // -1 means it was made with create_obj, like mail and corpses. Treat as always connected.
+  if (vnum == -1)
+    return FALSE;
+
+  // Invalid vnums are always treated as non-connected.
+  else if (vnum < 0 || vnum > (zone_table[top_of_zone_table].top))
+    return TRUE;
+
+  for (int zone_idx = 0; zone_idx <= top_of_zone_table; zone_idx++) {
+    if (vnum >= (zone_table[zone_idx].number * 100) && vnum <= zone_table[zone_idx].top) {
+      return (zone_table[zone_idx].approved || zone_table[zone_idx].editing_restricted_to_admin);
+    }
+  }
+
+  // We should never get here.
+  mudlog_vfprintf(NULL, LOG_SYSLOG, "SYSERR: Got to 'unreachable' end of vnum_from_editing_restricted_zone(%ld).", vnum);
+  return FALSE;
 }
 
 /* search a room for a char, and return a pointer if found..  */
@@ -2387,9 +2441,8 @@ void extract_icon(struct matrix_icon * icon)
 
   if (icon->decker) {
     if (icon->decker->hitcher) {
-      PLR_FLAGS(icon->decker->hitcher).RemoveBit(PLR_MATRIX);
       send_to_char(icon->decker->hitcher, "You return to your senses.\r\n");
-      icon->decker->hitcher = NULL;
+      clear_hitcher(icon->decker->hitcher, FALSE);      
     }
     struct obj_data *temp;
     for (struct obj_data *obj = icon->decker->software; obj; obj = temp) {
@@ -2401,6 +2454,11 @@ void extract_icon(struct matrix_icon * icon)
       temp2 = seen->next;
       delete seen;
     }
+    // Clear the deck if this is an otaku
+    if (icon->decker->deck && icon->decker->deck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
+      extract_obj(icon->decker->deck);
+    }
+    
     DELETE_AND_NULL(icon->decker);
   } else {
     ic_index[icon->rnum].number--;
@@ -2593,6 +2651,18 @@ void extract_obj(struct obj_data * obj, bool dont_warn_on_kept_items)
     mudlog(buf, NULL, LOG_PURGELOG, TRUE);
   }
 
+  if (GET_OBJ_TYPE(obj) == ITEM_GRAFFITI && GET_GRAFFITI_SPRAYED_BY(obj) > 0) {
+    auto it = global_graffiti_count.find(GET_GRAFFITI_SPRAYED_BY(obj));
+    if (it != global_graffiti_count.end() ) {
+      it->second--;
+      if (it->second < 0) {
+        mudlog_vfprintf(NULL, LOG_SYSLOG, "SYSERR: Idnum %d has a negative graffiti total in the global list.", GET_GRAFFITI_SPRAYED_BY(obj));
+      }
+    } else {
+      mudlog_vfprintf(NULL, LOG_SYSLOG, "SYSERR: Destroying graffiti with idnum %d who has no tracking in the global list.", GET_GRAFFITI_SPRAYED_BY(obj));
+    }
+  }
+
   // Iterate through all cyberdeck parts and designs in the game, making sure none point to this.
   if ((GET_OBJ_TYPE(obj) == ITEM_CYBERDECK || GET_OBJ_TYPE(obj) == ITEM_CUSTOM_DECK)) {
     clear_all_cyberdeck_part_pointers_pointing_to_deck(obj);
@@ -2715,7 +2785,7 @@ void extract_char(struct char_data * ch, bool do_save)
   ACMD_CONST(do_return);
 
   if (ch->desc || GET_IDNUM(ch) > 0) {
-    log_vfprintf("Extracting PC %s (%ld).", GET_CHAR_NAME(ch), GET_IDNUM(ch));
+    log_vfprintf("Extracting PC %s (%ld), DB save flag %s.", GET_CHAR_NAME(ch), GET_IDNUM(ch), do_save ? "TRUE" : "FALSE");
   }
 
   if (ch->in_room)
@@ -2902,9 +2972,7 @@ void extract_char(struct char_data * ch, bool do_save)
     ch->persona = NULL;
     PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
   } else if (PLR_FLAGGED(ch, PLR_MATRIX) && ch->in_room) {
-    for (struct char_data *temp = ch->in_room->people; temp; temp = temp->next_in_room)
-      if (PLR_FLAGGED(temp, PLR_MATRIX))
-        temp->persona->decker->hitcher = NULL;
+    clear_hitcher(ch, TRUE);
   }
 
   /* end astral tracking */

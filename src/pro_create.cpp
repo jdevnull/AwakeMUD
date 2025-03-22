@@ -28,6 +28,7 @@
 
 extern void part_design(struct char_data *ch, struct obj_data *design);
 extern void spell_design(struct char_data *ch, struct obj_data *design);
+extern void complex_form_design(struct char_data *ch, struct obj_data *design);
 extern void ammo_test(struct char_data *ch, struct obj_data *obj);
 extern void weight_change_object(struct obj_data * obj, float weight);
 extern bool focus_is_usable_by_ch(struct obj_data *focus, struct char_data *ch);
@@ -151,6 +152,9 @@ void pedit_parse(struct descriptor_data *d, const char *arg)
                    "Enter Rating: ");
     else if (GET_DESIGN_PROGRAM(d->edit_obj) == SOFT_RESPONSE && number > 3)
       send_to_char("You can't create a response increase of a rating higher than 3.\r\nEnter Rating: ", CH);
+    else if (number <= 0)
+      send_to_char(CH, "You can't create a program with a rating less than 0..\r\n"
+                   "Enter Rating: ");
     else {
       GET_DESIGN_RATING(d->edit_obj) = number;
       pedit_disp_menu(d);
@@ -246,6 +250,67 @@ struct obj_data *can_program(struct char_data *ch)
   return NULL;
 }
 
+int get_program_skill(char_data *ch, obj_data *prog, int target)
+{
+  int skill = 0;
+  switch (GET_DESIGN_PROGRAM(prog)) {
+  case SOFT_BOD:
+  case SOFT_EVASION:
+  case SOFT_MASKING:
+  case SOFT_SENSOR:
+  case SOFT_ASIST_COLD:
+  case SOFT_ASIST_HOT:
+  case SOFT_HARDENING:
+  case SOFT_ICCM:
+  case SOFT_ICON:
+  case SOFT_MPCP:
+  case SOFT_REALITY:
+  case SOFT_RESPONSE:
+    skill = get_skill(ch, SKILL_PROGRAM_CYBERTERM, target);
+    break;
+  case SOFT_ATTACK:
+  case SOFT_SLOW:
+    skill = get_skill(ch, SKILL_PROGRAM_COMBAT, target);
+    break;
+  case SOFT_CLOAK:
+  case SOFT_LOCKON:
+  case SOFT_MEDIC:
+  case SOFT_ARMOR:
+  case SOFT_SHIELD:
+    skill = get_skill(ch, SKILL_PROGRAM_DEFENSIVE, target);
+    break;
+  case SOFT_BATTLETEC:
+  case SOFT_COMPRESSOR:
+  case SOFT_SLEAZE:
+  case SOFT_TRACK:
+  case SOFT_SUITE:
+    skill = get_skill(ch, SKILL_PROGRAM_SPECIAL, target);
+    break;
+  case SOFT_CAMO:
+  case SOFT_CRASH:
+  case SOFT_DEFUSE:
+  case SOFT_EVALUATE:
+  case SOFT_VALIDATE:
+  case SOFT_SWERVE:
+  case SOFT_SNOOPER:
+  case SOFT_ANALYZE:
+  case SOFT_DECRYPT:
+  case SOFT_DECEPTION:
+  case SOFT_RELOCATE:
+  case SOFT_SCANNER:
+  case SOFT_BROWSE:
+  case SOFT_READ:
+  case SOFT_COMMLINK:
+    skill = get_skill(ch, SKILL_PROGRAM_OPERATIONAL, target);
+    break;
+  default:
+    mudlog_vfprintf(ch, LOG_SYSLOG, "SYSERR: Unknown SOFT_X %d to do_design's switch statement!", GET_DESIGN_PROGRAM(prog));
+    skill = 0;
+    break;
+  }
+  return skill;
+}
+
 ACMD(do_design)
 {
   ACMD_DECLARE(do_program);
@@ -308,60 +373,7 @@ ACMD(do_design)
     target--;
   else if (GET_DESIGN_RATING(prog) > 9)
     target++;
-  switch (GET_DESIGN_PROGRAM(prog)) {
-  case SOFT_BOD:
-  case SOFT_EVASION:
-  case SOFT_MASKING:
-  case SOFT_SENSOR:
-  case SOFT_ASIST_COLD:
-  case SOFT_ASIST_HOT:
-  case SOFT_HARDENING:
-  case SOFT_ICCM:
-  case SOFT_ICON:
-  case SOFT_MPCP:
-  case SOFT_REALITY:
-  case SOFT_RESPONSE:
-    skill = get_skill(ch, SKILL_PROGRAM_CYBERTERM, target);
-    break;
-  case SOFT_ATTACK:
-  case SOFT_SLOW:
-    skill = get_skill(ch, SKILL_PROGRAM_COMBAT, target);
-    break;
-  case SOFT_CLOAK:
-  case SOFT_LOCKON:
-  case SOFT_MEDIC:
-  case SOFT_ARMOR:
-    skill = get_skill(ch, SKILL_PROGRAM_DEFENSIVE, target);
-    break;
-  case SOFT_BATTLETEC:
-  case SOFT_COMPRESSOR:
-  case SOFT_SLEAZE:
-  case SOFT_TRACK:
-  case SOFT_SUITE:
-    skill = get_skill(ch, SKILL_PROGRAM_SPECIAL, target);
-    break;
-  case SOFT_CAMO:
-  case SOFT_CRASH:
-  case SOFT_DEFUSE:
-  case SOFT_EVALUATE:
-  case SOFT_VALIDATE:
-  case SOFT_SWERVE:
-  case SOFT_SNOOPER:
-  case SOFT_ANALYZE:
-  case SOFT_DECRYPT:
-  case SOFT_DECEPTION:
-  case SOFT_RELOCATE:
-  case SOFT_SCANNER:
-  case SOFT_BROWSE:
-  case SOFT_READ:
-  case SOFT_COMMLINK:
-    skill = get_skill(ch, SKILL_PROGRAM_OPERATIONAL, target);
-    break;
-  default:
-    mudlog_vfprintf(ch, LOG_SYSLOG, "SYSERR: Unknown SOFT_X %d to do_design's switch statement!", GET_DESIGN_PROGRAM(prog));
-    skill = 0;
-    break;
-  }
+  skill = get_program_skill(ch, prog, target);
   if (!skill) {
     send_to_char(ch, "You have no idea how to go about creating a program design for that.\r\n");
     return;
@@ -648,7 +660,7 @@ void update_buildrepair(void)
                 send_to_char(desc->character, "A distant, powerful matrix entity is disappointed in you. You realise programming %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
                 break;
               case 8:
-                send_to_char(desc->character, "You tried to forge %s into an incredible program that would have pierced open the walls of flowing code. You're pretty sure you misplaces a parentheses somewhere so it all turned into gibberish about broccoli.\r\n", GET_OBJ_NAME(PROG));
+                send_to_char(desc->character, "You tried to forge %s into an incredible program that would have pierced open the walls of flowing code. You're pretty sure you misplaced a parenthesis somewhere so it all turned into gibberish about broccoli.\r\n", GET_OBJ_NAME(PROG));
                 break;
               case 9:
                 send_to_char(desc->character, "You tried to program %s only to realize many hours in you were coding on one of the spare half-assembled things you had littered around your current workspace, accomplishing nothing.\r\n", GET_OBJ_NAME(PROG));
@@ -673,6 +685,48 @@ void update_buildrepair(void)
           PROG = NULL;
           AFF_FLAGS(desc->character).RemoveBit(AFF_PROGRAM);
           CH->char_specials.timer = 0;
+        }
+      } else if (AFF_FLAGGED(desc->character, AFF_COMPLEX_FORM_PROGRAM)) {
+        if (--GET_COMPLEX_FORM_LEARNING_TICKS_LEFT(PROG) < 1) {
+          if (GET_COMPLEX_FORM_LEARNING_FAILED(PROG)) {
+            switch(number(1,10)) {
+              case 1:
+                send_to_char(desc->character, "You have finished a spell formula for Stunbolt... wait, what the hell?! You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 2:
+                send_to_char(desc->character, "There was a series of articles related to what you were doing, but you somehow ended up on a page about crabs. Why always crabs?!? You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 3:
+                send_to_char(desc->character, "You became distracted and lost hours of your life to a Penumbrawalk mud. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 4:
+                send_to_char(desc->character, "You try to shape the resonance but somehow end up ordering takeout from a Stuffer Shack in Neo-Tokyo. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 5:
+                send_to_char(desc->character, "The deep resonance speaks to you! Unfortunately, it's just complaining about matrix lag. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 6:
+                send_to_char(desc->character, "You reach for the threads of resonance but accidentally subscribe to 47 different spam newsletters. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 7:
+                send_to_char(desc->character, "You achieve deep matrix meditation, only to discover you've been watching cat videos for the last four hours. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 8:
+                send_to_char(desc->character, "Success! You've mastered... wait, no, that's just static cling. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              case 9:
+                send_to_char(desc->character, "Your attempt to weave the resonance somehow results in all nearby devices playing 'Never Gonna Give You Up'. You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+                break;
+              default:
+                send_to_char(desc->character, "You realise learning %s is a lost cause.\r\n", GET_OBJ_NAME(PROG));
+            }
+            extract_obj(PROG);
+          } else {
+            send_to_char(desc->character, "You successfully learn %s.\r\n", GET_OBJ_NAME(PROG));
+            GET_COMPLEX_FORM_LEARNING_TICKS_LEFT(PROG) = 0;            
+          }
+          PROG = NULL;
+          AFF_FLAGS(desc->character).RemoveBit(AFF_COMPLEX_FORM_PROGRAM);
         }
       } else if (AFF_FLAGGED(CH, AFF_RITUALCAST)) {
         if (handle_ritualcast_tick(CH, PROG)) {

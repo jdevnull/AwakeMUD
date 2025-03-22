@@ -86,6 +86,12 @@
 
 /* char and mob related defines */
 
+/* otaku paths */
+
+#define OTAKU_PATH_NORMIE     0
+#define OTAKU_PATH_CYBERADEPT 1
+#define OTAKU_PATH_TECHNOSHAM 2
+
 /* magical traditions */
 
 #define TRAD_HERMETIC   0
@@ -188,7 +194,8 @@
 #define TOTEM_MOONMAIDEN   72
 #define TOTEM_TRICKSTER    73
 #define TOTEM_FATHERTREE   74
-#define NUM_TOTEMS         75
+#define TOTEM_DRAGON       75
+#define NUM_TOTEMS         76
 
 /* PC races */
 
@@ -355,7 +362,9 @@ enum {
 #define PLR_IS_TEMPORARILY_LOADED            52
 #define PLR_COMPLETED_EXPERT_DRIVER_OVERHAUL 53
 #define PLR_OLD_MAN_YELLS_AT_CLOUDS          54
-#define PLR_MAX                              55
+#define PLR_SUBMERSION                       55
+#define PLR_ADDITIONAL_SCRUTINY              56
+#define PLR_MAX                              57
 // Adding something here? Add it to constants.cpp's player_bits too.
 
 
@@ -366,7 +375,7 @@ enum {
 #define MOB_SENTINEL             1  /* Mob should not move                    */
 #define MOB_SCAVENGER            2  /* Mob picks up stuff on the ground       */
 #define MOB_ISNPC                3  /* (R) Automatically set on all Mobs      */
-// unused, must remove, was aware  4
+// unused, must remove, was aware  4, also touch db.cpp mob_flag_map
 #define MOB_AGGRESSIVE           5  /* Mob hits players in the room           */
 #define MOB_STAY_ZONE            6  /* Mob shouldn't wander out of zone       */
 #define MOB_WIMPY                7  /* Mob flees if severely injured          */
@@ -379,19 +388,19 @@ enum {
 #define MOB_DUAL_NATURE          14 /* mob is dual-natured                    */
 #define MOB_IMMEXPLODE           15 /* mob is immune to explosions            */
 #define MOB_AGGR_TROLL           16 /* auto attack troll PC's                 */
-// unused, must remove, was noblind  17
+// unused, must remove, was noblind  17, also touch db.cpp mob_flag_map
 #define MOB_ASTRAL               18 /* Mob is solely in the astral plane      */
 #define MOB_GUARD                19 /* mob carries out security               */
 #define MOB_AGGR_HUMAN           20 /* auto attack human PC's                 */
 #define MOB_SNIPER               21 /* mob searches area for PCs              */
-// unused, must remove, was private  22
-// unused, must remove, was track    23
+// unused, must remove, was private  22, also touch db.cpp mob_flag_map
+// unused, must remove, was track    23, also touch db.cpp mob_flag_map
 #define MOB_FLAMEAURA            24
 #define MOB_SPIRITGUARD          25
 #define MOB_STUDY                26 /* Saeder Krupp*/
 #define MOB_AIDSORCERY           27
-// unused, must remove, was aztech   28
-// unused, must remove, was renraku  29
+// unused, must remove, was aztech   28, also touch db.cpp mob_flag_map
+// unused, must remove, was renraku  29, also touch db.cpp mob_flag_map
 #define MOB_NOKILL               30 /* Unkillable mob */
 #define MOB_TOTALINVIS           31 // can only be seen by staff
 #define MOB_INANIMATE            32 // no flesh or blood
@@ -419,8 +428,8 @@ enum {
 #define PRF_PKER                               11 /* is able to pk/be pked        */
 #define PRF_HIRED                              12 /* Participating in a prun */
 #define PRF_AFK                                13 /* Afk   */
-#define PRF_SUPPRESS_STAFF_RADIO               14 /* EMPTY SPACE, FILL ME! */
-#define PRF_UNUSED2_PLS_REPLACE                15 /* EMPTY SPACE, FILL ME!        15 */
+#define PRF_SUPPRESS_STAFF_RADIO               14 /* Ignore staff radio. */
+#define PRF_NOTRAFFIC                          15 /* Ignore traffic messages. */
 #define PRF_NOHASSLE                           16 /* Aggr mobs won't attack  */
 #define PRF_ROOMFLAGS                          17 /* Can see room flags (ROOM_x) */
 #define PRF_HOLYLIGHT                          18 /* Can see in dark   */
@@ -584,12 +593,13 @@ enum {
 #define AFF_VOICE_MODULATOR                         54
 #define AFF_WEARING_ACTIVE_DOCWAGON_RECEIVER        55
 #define AFF_CHEATLOG_MARK                           56
-#define AFF_MAX                                     57
+#define AFF_COMPLEX_FORM_PROGRAM                    57
+#define AFF_MAX                                     58
 // TODO: If you add another long-state action like building, designing, etc:
 // - Add it to the BR_TASK_AFF_FLAGS section below, which affects bioware_check and the B/R flag in the wholist
 // - Add it to the IS_WORKING and STOP_WORKING macros in utils.h
 // - Check for anywhere I've missed in this comment
-#define BR_TASK_AFF_FLAGS AFF_DESIGN, AFF_PROGRAM, AFF_PART_DESIGN, AFF_PART_BUILD, AFF_SPELLDESIGN, AFF_AMMOBUILD, AFF_RITUALCAST, AFF_CIRCLE, AFF_LODGE
+#define BR_TASK_AFF_FLAGS AFF_DESIGN, AFF_PROGRAM, AFF_PART_DESIGN, AFF_PART_BUILD, AFF_SPELLDESIGN, AFF_AMMOBUILD, AFF_RITUALCAST, AFF_CIRCLE, AFF_LODGE, AFF_COMPLEX_FORM_PROGRAM
 
 
 /* room-related defines */
@@ -623,18 +633,18 @@ enum {
 #define ROOM_INDOORS                    3   /* Indoors                   */
 #define ROOM_PEACEFUL                   4   /* Violence not allowed      */
 #define ROOM_SOUNDPROOF                 5   /* Shouts, gossip blocked    */
-// UNUSED SLOT         was notrack, you need to clear it
+// UNUSED SLOT         was notrack, you need to clear it, also touch db.cpp room_flag_map
 #define ROOM_NOMAGIC                    7   /* Magic not allowed         */
 #define ROOM_TUNNEL                     8   /* room for only 1 pers      */
 #define ROOM_ARENA                      9   /* Can't teleport in         */
 #define ROOM_STREETLIGHTS               10  /* Room has a streetlight    */
-// UNUSED SLOT         was house, you need to clear it
+// UNUSED SLOT         was house, you need to clear it, also touch db.cpp room_flag_map
 #define ROOM_NO_DROP                    12  /* You can't drop things here. */
-// UNUSED SLOT         was (unused), need to clear it
-// UNUSED SLOT         ok, no clear necessary
+// UNUSED SLOT         was (unused), need to clear it, also touch db.cpp room_flag_map
+// UNUSED SLOT         ok, no clear necessary, also touch db.cpp room_flag_map
 #define ROOM_BFS_MARK                   15  /* (R) breadth-first srch mrk */
 #define ROOM_LOW_LIGHT                  16  /* Sets room light level to lowlight levels on boot */
-// UNUSED SLOT         was !used
+// UNUSED SLOT         was !used, also touch db.cpp room_flag_map
 #define ROOM_NO_RADIO                   18  /* Radio is sketchy and phones dont work */
 #define ROOM_NOBIKE                     19  // Room blocks bikes from passing through it.
 #define ROOM_FREEWAY                    20  /* Room cannot be walked across. */
@@ -643,8 +653,8 @@ enum {
 #define ROOM_GARAGE                     23  // Room stores cars.
 #define ROOM_STAFF_ONLY                 24  // Room does not allow mortals to walk into it.
 #define ROOM_NOQUIT                     25  // Room does not allow quitting in it.
-// UNUSED SLOT         ok, no clear necessary
-// UNUSED SLOT         ok, no clear necessary
+// UNUSED SLOT         ok, no clear necessary, also touch db.cpp room_flag_map
+// UNUSED SLOT         ok, no clear necessary, also touch db.cpp room_flag_map
 #define ROOM_NOGRID                     28 // Room blocks gridguide.
 #define ROOM_STORAGE                    29 // Room stores items dropped in it.
 #define ROOM_NO_TRAFFIC                 30 // Prevents display of traffic atmospheric messages.
@@ -807,6 +817,25 @@ enum {
 #define MASK_DUAL    (1 << 2)
 #define MASK_COMPLETE    (1 << 3)
 
+#define ECHO_UNDEFINED     0
+#define ECHO_IMPROVED_IO   1
+#define ECHO_IMPROVED_HARD 2
+#define ECHO_IMPROVED_MPCP 3
+#define ECHO_PERSONA_BOD   4
+#define ECHO_PERSONA_EVAS  5
+#define ECHO_PERSONA_MASK  6
+#define ECHO_PERSONA_SENS  7
+#define ECHO_IMPROVED_REA  8
+#define ECHO_GHOSTING      9
+#define ECHO_NEUROFILTER   10
+#define ECHO_OVERCLOCK     11
+#define ECHO_DAEMON_SUM    12
+#define ECHO_INFO_SORT     13
+#define ECHO_RES_LINK      14
+#define ECHO_SWITCH        15
+#define ECHO_TRACERT       16
+#define ECHO_MAX           17
+
 #define AURA_VIOLENCE      0
 #define AURA_TORTURE       1
 #define AURA_HATRED        2
@@ -949,7 +978,7 @@ enum {
 #define SKILL_AURA_READING           55
 #define SKILL_STEALTH                56
 // unused
-#define SKILL_TRACK                  58
+// unused
 #define SKILL_UNUSED_WAS_CLIMBING    59
 #define SKILL_PILOT_BIKE             60
 #define SKILL_UNUSED_WAS_PILOT_FIXED_WING   61
@@ -1048,8 +1077,14 @@ enum {
 #define SKILL_PILOT_WALKER              151
 #define SKILL_MANDARIN                  152
 #define SKILL_HAITIAN_CREOLE            153
+// otaku-specific skills
+#define SKILL_CHANNEL_ACCESS            154
+#define SKILL_CHANNEL_CONTROL           155
+#define SKILL_CHANNEL_INDEX             156
+#define SKILL_CHANNEL_FILES             157
+#define SKILL_CHANNEL_SLAVE             158
 
-#define MAX_SKILLS                      154
+#define MAX_SKILLS                      159
 // Adding a pilot skill? Update utils.cpp's pilot_skills[].
 
 // Skill type definitions.
@@ -1312,7 +1347,9 @@ enum {
 #define ITEM_DESTROYABLE        47
 #define ITEM_LOADED_DECORATION  48
 #define ITEM_CREATIVE_EFFORT    49
-#define NUM_ITEMS               50
+#define ITEM_PET                50
+#define ITEM_COMPLEX_FORM       51       /* otaku complex form               */
+#define NUM_ITEMS               52
 // Adding something? Add convenience definees to utils.hpp and put the type's name in constants.cpp.
 
 #define PATCH_ANTIDOTE          0
@@ -1365,8 +1402,8 @@ enum {
 #define ITEM_EXTRA_HUM                1     /* Item is humming              */
 #define ITEM_EXTRA_NORENT             2     /* Item cannot be rented        */
 #define ITEM_EXTRA_NODONATE           3     /* Item cannot be donated       */
-// unused, must remove, was !invis    4
-// unused, must remove, was invisible 5
+// unused, must remove, was !invis    4, also touch db.cpp item_extra_flag_map
+// unused, must remove, was invisible 5, also touch db.cpp item_extra_flag_map
 #define ITEM_EXTRA_MAGIC              6     /* Item is magical              */
 #define ITEM_EXTRA_NODROP             7     /* Item is cursed: can't drop   */
 #define ITEM_EXTRA_FORMFIT            8     /* Item is blessed              */
@@ -1375,7 +1412,7 @@ enum {
 #define ITEM_EXTRA_STAFF_ONLY         11    /* Only a god may use this item */
 #define ITEM_EXTRA_TWOHANDS           12    /* weapon takes 2 hands to use */
 #define ITEM_EXTRA_COMPBURST          13    /* Weapon requires complex action to use burst fire */
-// unused, must remove, was volatile  14
+// unused, must remove, was volatile  14, also touch db.cpp item_extra_flag_map
 #define ITEM_EXTRA_WIZLOAD            15    /* item was loaded by an immortal */
 #define ITEM_EXTRA_NOTROLL            16
 #define ITEM_EXTRA_NOELF              17
@@ -1383,7 +1420,7 @@ enum {
 #define ITEM_EXTRA_NOORK              19
 #define ITEM_EXTRA_NOHUMAN            20
 #define ITEM_EXTRA_SNIPER             21
-// #define ITEM_EXTRA_IMMLOAD            22  not currently used, BUT reserved since many items have this set.
+// #define ITEM_EXTRA_IMMLOAD            22  not currently used, BUT reserved since many items have this set., also touch db.cpp item_extra_flag_map
 #define ITEM_EXTRA_NERPS              23    /* Item does not actually have any coded effect. */
 #define ITEM_EXTRA_BLOCKS_ARMOR       24    // Can't wear other armors with this.
 #define ITEM_EXTRA_HARDENED_ARMOR     25    // Applies hardened armor rules (deflect attacks with power <= armor rating) CC p51
@@ -1397,7 +1434,8 @@ enum {
 #define ITEM_EXTRA_CHEATLOG_MARK      33
 #define ITEM_EXTRA_CONCEALED_IN_EQ    34    // Doesn't show up when someone looks at you.
 #define ITEM_EXTRA_TRODE_NET          35
-#define MAX_ITEM_EXTRA                36
+#define ITEM_EXTRA_OTAKU_RESONANCE    36    // This is related to Otaku nonsense
+#define MAX_ITEM_EXTRA                37
 
 /* Ammo types */
 #define AMMO_NORMAL     0
@@ -1686,30 +1724,31 @@ enum {
 #define SOFT_DECEPTION          13
 #define SOFT_RELOCATE           14
 #define SOFT_SLEAZE             15
-#define SOFT_SCANNER    16
-#define SOFT_BROWSE    17
-#define SOFT_READ    18
-#define SOFT_TRACK    19
-#define SOFT_ARMOR    20
-#define SOFT_CAMO    21
-#define SOFT_CRASH    22
-#define SOFT_DEFUSE    23
-#define SOFT_EVALUATE    24
-#define SOFT_VALIDATE    25
-#define SOFT_SWERVE    26
-#define SOFT_SUITE    27
-#define SOFT_COMMLINK    28
-#define SOFT_CLOAK    29
-#define SOFT_LOCKON    30
-#define SOFT_ASIST_COLD    31
-#define SOFT_ASIST_HOT    32
-#define SOFT_HARDENING    33
-#define SOFT_ICCM    34
-#define SOFT_ICON    35
-#define SOFT_MPCP    36
-#define SOFT_REALITY    37
-#define SOFT_RESPONSE    38
-#define NUM_PROGRAMS    39
+#define SOFT_SCANNER            16
+#define SOFT_BROWSE             17
+#define SOFT_READ               18
+#define SOFT_TRACK              19
+#define SOFT_ARMOR              20
+#define SOFT_CAMO               21
+#define SOFT_CRASH              22
+#define SOFT_DEFUSE             23
+#define SOFT_EVALUATE           24
+#define SOFT_VALIDATE           25
+#define SOFT_SWERVE             26
+#define SOFT_SUITE              27
+#define SOFT_COMMLINK           28
+#define SOFT_CLOAK              29
+#define SOFT_LOCKON             30
+#define SOFT_ASIST_COLD         31
+#define SOFT_ASIST_HOT          32
+#define SOFT_HARDENING          33
+#define SOFT_ICCM               34
+#define SOFT_ICON               35
+#define SOFT_MPCP               36
+#define SOFT_REALITY            37
+#define SOFT_RESPONSE           38
+#define SOFT_SHIELD             39
+#define NUM_PROGRAMS            40
 
 #define PART_ACTIVE    1
 #define PART_STORAGE    2
@@ -2050,6 +2089,7 @@ enum {
 #define SCMD_AUTHORIZE    10
 #define SCMD_SQUELCHTELLS 11
 #define SCMD_MUTE_NEWBIE  12
+#define SCMD_SUBMERSE     13
 
 /* do_say */
 #define SCMD_SAY        0
@@ -2275,7 +2315,11 @@ enum {
 #define CON_ART_CREATE          52
 #define CON_ACCOUNT_PARSE       53
 #define CON_FACTION_EDIT        54
-#define CON_MAX                 54
+#define CON_PC_EXDESC_EDIT      55
+#define CON_PET_CREATE          56
+#define CON_CF_CREATE           57
+#define CON_SUBMERSION          58
+#define CON_MAX                 58
 #define IS_VALID_STATE_TO_RECEIVE_COMMS(s) ((s) == CON_PLAYING || ((s) >= CON_PRO_CREATE && (s) <= CON_AMMO_CREATE) || (s) == CON_PGEDIT || ((s) >= CON_DECORATE_VEH && (s) <= CON_ART_CREATE))
 // If you add another state, you need to touch comm.cpp's close_socket and make sure it's reflected there!
 // Also add it to constants's connected_types.
@@ -2587,6 +2631,7 @@ enum {
 #define OBJ_SEATTLE_TAXI_SIGN              600
 #define OBJ_PORTLAND_TAXI_SIGN             699
 #define OBJ_CARIBBEAN_TAXI_SIGN            610
+#define OBJ_CAS_TAXI_SIGN                  101600
 #define OBJ_SPECIAL_PC_CORPSE              43
 #define OBJ_COLT_M23                       838
 #define OBJ_NICAMI_SCOPE                   28702
@@ -2736,6 +2781,7 @@ enum {
 #define OBJ_CYB_SMARTLINK_II               85118
 #define OBJ_CYB_DERMAL_SHEATHING_I         85075
 #define OBJ_CYB_ARMORED_OBV_ARMS_II        6562
+#define OBJ_CYB_ASIST_CONVERTER            85025
 #else
 #define OBJ_CYB_CERAMIC_BONE_LACING        463
 #define OBJ_CYB_KEVLAR_BONE_LACING         462
@@ -2748,6 +2794,7 @@ enum {
 #define OBJ_CYB_SMARTLINK_II               302
 #define OBJ_CYB_DERMAL_SHEATHING_I         322
 #define OBJ_CYB_ARMORED_OBV_ARMS_II        572
+#define OBJ_CYB_ASIST_CONVERTER            85025
 #endif
 
 #define OBJ_CYB_EYE_PACKAGE_LL_TH_FC_ALPHA 566
@@ -2810,7 +2857,9 @@ enum {
 #define OBJ_CUSTOM_ART                     125
 #define OBJ_HOLIDAY_GIFT                   126
 #define OBJ_BLANK_MAGAZINE                 127
-#define TOP_OF_TEMPLATE_ITEMS              127
+#define OBJ_CUSTOM_PET                     128
+#define OBJ_BLANK_COMPLEX_FORM             129
+#define TOP_OF_TEMPLATE_ITEMS              129
 
 #define OBJ_DOCWAGON_PAPER_GOWN            16201
 #define OBJ_ANTI_DRUG_CHEMS                44
@@ -3089,7 +3138,8 @@ enum {
 #define DIRTY_BIT_MEMORY      5
 #define DIRTY_BIT_DRUG        6
 #define DIRTY_BIT_ALIAS       7
-#define NUM_DIRTY_BITS        8
+#define DIRTY_BIT_ECHOES      8
+#define NUM_DIRTY_BITS        9
 
 
 #define SMARTLINK_II_MODIFIER 3
@@ -3228,6 +3278,9 @@ enum {
 #define OBJ_LOAD_REASON_BULLETPANTS_MAKE_BOX     56
 #define OBJ_LOAD_REASON_FIND_OBJ_SHOP            57
 #define OBJ_LOAD_REASON_SHOP_RECEIVE             58
+#define OBJ_LOAD_REASON_CREATE_PET               59
+#define OBJ_LOAD_REASON_OTAKU_RESONANCE          60
+#define OBJ_LOAD_REASON_CREATE_COMPLEX_FORM      61
 
 #define IDNUM_FOR_MOB_ALERT_STATE  -1
 

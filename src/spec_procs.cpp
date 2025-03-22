@@ -340,15 +340,15 @@ int train_ability_cost(struct char_data *ch, int abil, int level, bool untrain) 
 
   switch (abil) {
     case ADEPT_IMPROVED_BOD:
-      if (GET_REAL_BOD(ch) + GET_POWER_TOTAL(ch, ADEPT_IMPROVED_BOD) + (untrain ? -1 : 0) >= racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][BOD])
+      if (GET_REAL_BOD(ch) + GET_POWER_TOTAL(ch, ADEPT_IMPROVED_BOD) + (untrain ? -1 : 0) >= get_attr_max(ch, BOD))
         cost *= 2;
       break;
     case ADEPT_IMPROVED_QUI:
-      if (GET_REAL_QUI(ch) + GET_POWER_TOTAL(ch, ADEPT_IMPROVED_QUI) + (untrain ? -1 : 0) >= racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][QUI])
+      if (GET_REAL_QUI(ch) + GET_POWER_TOTAL(ch, ADEPT_IMPROVED_QUI) + (untrain ? -1 : 0) >= get_attr_max(ch, QUI))
         cost *= 2;
       break;
     case ADEPT_IMPROVED_STR:
-      if (GET_REAL_STR(ch) + GET_POWER_TOTAL(ch, ADEPT_IMPROVED_STR) + (untrain ? -1 : 0) >= racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][STR])
+      if (GET_REAL_STR(ch) + GET_POWER_TOTAL(ch, ADEPT_IMPROVED_STR) + (untrain ? -1 : 0) >= get_attr_max(ch, STR))
         cost *= 2;
       break;
   }
@@ -785,8 +785,26 @@ int get_max_skill_for_char(struct char_data *ch, int skill, int type) {
   }
 
   // Scope maximums based on teacher type.
-  if (type == NEWBIE)
+  if (type == NEWBIE) {
     max = NEWBIE_SKILL;
+
+    // Otaku can start with Computers 8 and Eti 4 as maximums.
+    if (IS_OTAKU(ch)) {
+      switch (skill) {
+        case SKILL_COMPUTER:
+          max = 8;
+          break;
+        case SKILL_CORPORATE_ETIQUETTE:
+        case SKILL_TRIBAL_ETIQUETTE:
+        case SKILL_MEDIA_ETIQUETTE:
+        case SKILL_STREET_ETIQUETTE:
+        case SKILL_ELF_ETIQUETTE:
+          max = 4;
+          break;
+      }
+    }
+  }
+
   else if (type == AMATEUR)
     max = NORMAL_MAX_SKILL;
   else if (type == ADVANCED)
@@ -909,6 +927,7 @@ SPECIAL(teacher)
 
   if (!*argument) {
     bool found_a_skill_already = FALSE;
+    bool channel_skills_found = FALSE;
     for (int i = 0; i < NUM_TEACHER_SKILLS; i++) {
       if (teachers[ind].s[i] > 0) {
         // Mundanes can't learn magic skills, with the exception of dragons/ghouls who can learn aura reading.
@@ -917,6 +936,11 @@ SPECIAL(teacher)
         {
           continue;
         }
+
+        // Non-otaku cannot learn otaku channel skills.
+        if (skills[teachers[ind].s[i]].requires_resonance && !IS_OTAKU(ch))
+          continue;
+        else channel_skills_found = TRUE;
 
         // Adepts can't learn externally-focused skills.
         if (GET_TRADITION(ch) == TRAD_ADEPT && (teachers[ind].s[i] == SKILL_CONJURING
@@ -941,8 +965,7 @@ SPECIAL(teacher)
             snprintf(buf, sizeof(buf), "%s can teach you the following:\r\n", GET_NAME(master));
           }
           snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "  %s\r\n", skills[teachers[ind].s[i]].name);
-        }
-        else if (GET_SKILL(ch, teachers[ind].s[i]) < max && !ch->char_specials.saved.skills[teachers[ind].s[i]][1])
+        } else if (GET_SKILL(ch, teachers[ind].s[i]) < max && !ch->char_specials.saved.skills[teachers[ind].s[i]][1])
         {
           // Add conditional messaging.
           if (!found_a_skill_already) {
@@ -962,7 +985,11 @@ SPECIAL(teacher)
       return TRUE;
     }
 
-    if (GET_SKILL_POINTS(ch) > 0)
+    if (channel_skills_found && GET_CHANNEL_POINTS(ch) > 0)
+      snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "\r\nYou have %d channel point%s to use specifically for otaku skills, and %d skill point%s.\r\n",
+              GET_CHANNEL_POINTS(ch), GET_CHANNEL_POINTS(ch) > 1 ? "s" : "",
+              GET_SKILL_POINTS(ch), GET_SKILL_POINTS(ch) > 1 ? "s" : "");
+    else if (GET_SKILL_POINTS(ch) > 0)
       snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "\r\nYou have %d point%s to use for skills.\r\n",
               GET_SKILL_POINTS(ch), GET_SKILL_POINTS(ch) > 1 ? "s" : "");
     else
@@ -1052,7 +1079,10 @@ SPECIAL(teacher)
     }
     lose_nuyen(ch, skill_nuyen_cost, NUYEN_OUTFLOW_SKILL_TRAINING);
   }
-  if (GET_SKILL_POINTS(ch) > 0)
+
+  if (GET_CHANNEL_POINTS(ch) > 0 && skills[skill_num].requires_resonance) 
+    GET_CHANNEL_POINTS(ch)--;
+  else if (GET_SKILL_POINTS(ch) > 0)
     GET_SKILL_POINTS(ch)--;
   else
     GET_KARMA(ch) -= get_skill_price(ch, skill_num) * 100;
@@ -1082,9 +1112,9 @@ int calculate_training_raw_cost(struct char_data *ch, int attribute) {
 bool attribute_below_maximums(struct char_data *ch, int attribute) {
   // Special case: Bod can have permanent loss.
   if (attribute == BOD)
-    return GET_REAL_BOD(ch) < racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][BOD];
+    return GET_REAL_BOD(ch) < get_attr_max(ch, BOD);
 
-  return GET_REAL_ATT(ch, attribute) < racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][attribute];
+  return GET_REAL_ATT(ch, attribute) < get_attr_max(ch, attribute);
 }
 
 void send_training_list_to_char(struct char_data *ch, int ind) {
@@ -1152,6 +1182,10 @@ void train_attribute(struct char_data *ch, struct char_data *trainer, int ind, i
 
   // Apply the change.
   GET_REAL_ATT(ch, attr) += 1;
+
+  // Update channel points if in chargen
+  if (trainers[ind].is_newbie && IS_OTAKU(ch))
+    GET_CHANNEL_POINTS(ch) = (GET_REAL_INT(ch) + GET_REAL_WIL(ch) + GET_REAL_CHA(ch) + 2) / 3;
 
   // Update character's calculated values.
   affect_total(ch);
@@ -2154,7 +2188,7 @@ SPECIAL(jeff) {
       act("$n looks at $N suspiciously.", FALSE, jeff, 0, ch, TO_NOTVICT);
       act("You look at $N suspiciously.", FALSE, jeff, 0, ch, TO_CHAR);
       act("$n looks at you suspiciously.", FALSE, jeff, 0, ch, TO_VICT);
-      if (jeff->in_room->number != 2326) {
+      if (GET_ROOM_VNUM(jeff->in_room) != 2326) {
         do_say(jeff, "Where the frag am I?", 0, 0);
       } else {
         if (IS_SET(EXIT(jeff, EAST)->exit_info, EX_CLOSED)) {
@@ -2169,7 +2203,7 @@ SPECIAL(jeff) {
       return TRUE;
     }
   } else if (CMD_IS("east")) {
-    if (perform_move(ch, EAST, LEADER, NULL) && jeff->in_room->number == 2326) {
+    if (perform_move(ch, EAST, LEADER, NULL) && GET_ROOM_VNUM(jeff->in_room) == 2326) {
       if (!IS_SET(EXIT(jeff, EAST)->exit_info, EX_CLOSED))
         do_gen_door(jeff, "roadblock", 0, SCMD_CLOSE);
     }
@@ -2180,8 +2214,25 @@ SPECIAL(jeff) {
     if (!strcasecmp("roadblock", args))
       do_say(jeff, "Slot off, it's 10 creds to pass chummer.", 0, 0);
     return TRUE;
-  } else if (number(0, 50) == 11)
-    do_say(jeff, "10 creds to pass through the roadblock chummer.", 0, 0);
+  } else {
+    switch (number(0, 500)) {
+      case 1:
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6:
+      case 7:
+      case 8:
+      case 9:
+      case 10:
+        do_say(jeff, "10 creds to pass through the roadblock chummer.", 0, 0);
+        break;
+      case 11:
+        do_say(jeff, "Gaslight, gatekeep, guyboss.", 0, 0);
+        break;
+    }
+  }
 
   return FALSE;
 }
@@ -3034,6 +3085,8 @@ SPECIAL(fixer)
     return TRUE;
   } else if (CMD_IS("list")) {
     bool found = FALSE;
+    char formatstr[MAX_STRING_LENGTH] = { '\0' };
+
     for (obj = fixer->carrying; obj; obj = obj->next_content)
       if (GET_OBJ_TIMER(obj) == GET_IDNUM(ch)) {
         if (!found) {
@@ -3058,10 +3111,12 @@ SPECIAL(fixer)
           }
         }
 
+        snprintf(formatstr, sizeof(formatstr), "%%-%ds^n  Status: ", 59 + count_color_codes_in_string(GET_OBJ_NAME(obj)));
+        send_to_char(ch, formatstr, GET_OBJ_NAME(obj));
         if (hour > 0) {
-          send_to_char(ch, "%-59s Status: %d hour%s\r\n", obj->text.name, hour, hour == 1 ? "" : "s");
+          send_to_char(ch, "%d hour%s\r\n", hour, hour == 1 ? "" : "s");
         } else {
-          send_to_char(ch, "%-59s Status: Ready\r\n", obj->text.name);
+          send_to_char("^gReady^n\r\n", ch);
         }
       }
     if (!found) {
@@ -4207,15 +4262,17 @@ int gen_receptionist(struct char_data * ch, struct char_data * recep,
 
   if (mode == RENT_FACTOR)
   {
-    act("$n gives you a key and shows you to your room.", FALSE, recep, 0, ch, TO_VICT);
+    act("$n enters you into the system; you'll load here going forward.", FALSE, recep, 0, ch, TO_VICT);
     snprintf(buf, sizeof(buf), "%s has rented at %ld", GET_CHAR_NAME(ch), ch->in_room->number);
     mudlog(buf, ch, LOG_CONNLOG, TRUE);
     act("$n helps $N into $S room.", FALSE, recep, 0, ch, TO_NOTVICT);
   }
 
+  /*
   if (ch->desc && !IS_SENATOR(ch))
     STATE(ch->desc) = CON_QMENU;
   extract_char(ch);
+  */
 
   return TRUE;
 }
@@ -4364,7 +4421,10 @@ SPECIAL(chargen_points_check) {
 
 SPECIAL(auth_room)
 {
-  if (ch && (CMD_IS("say") || CMD_IS("'") || CMD_IS("sayto") || CMD_IS("\"")) && !IS_ASTRAL(ch)) {
+  if (!ch)
+    return FALSE;
+
+  if ((CMD_IS("say") || CMD_IS("'") || CMD_IS("sayto") || CMD_IS("\"")) && !IS_ASTRAL(ch)) {
     /*
     skip_spaces(&argument);
     if (   !str_cmp("I have read the rules and policies, understand them, and agree to abide by them during my stay here.", argument)
@@ -4637,6 +4697,8 @@ SPECIAL(quest_debug_scanner)
         return TRUE;
       }
 
+      mudlog_vfprintf(ch, LOG_WIZLOG, "%s using tricorder-enhanced DIAGNOSE to view quest info on NPC %s.", GET_CHAR_NAME(ch), GET_CHAR_NAME(to));
+
       snprintf(buf, sizeof(buf), "NPC %s's quest-related information:\r\n", GET_CHAR_NAME(to));
       snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "Overall max rep: %d, overall min rep: %d\r\n",
               get_johnson_overall_max_rep(to), get_johnson_overall_min_rep(to));
@@ -4656,6 +4718,7 @@ SPECIAL(quest_debug_scanner)
       return TRUE;
     }
 
+    mudlog_vfprintf(ch, LOG_WIZLOG, "%s using tricorder-enhanced DIAGNOSE to view quest info on PC %s.", GET_CHAR_NAME(ch), GET_CHAR_NAME(to));
     snprintf(buf, sizeof(buf), "Player %s's quest-related information:\r\n", GET_CHAR_NAME(to));
     int real_mob = real_mobile(quest_table[GET_QUEST(to)].johnson);
     if (GET_QUEST(to)) {
@@ -4706,6 +4769,8 @@ SPECIAL(quest_debug_scanner)
       return TRUE;
     }
 
+    mudlog_vfprintf(ch, LOG_WIZLOG, "%s using tricorder-enhanced CLEANSE to wipe quest history for %s.", GET_CHAR_NAME(ch), GET_CHAR_NAME(to));
+
     for (int i = 0; i < QUEST_TIMER; i++) {
       GET_LQUEST(to, i) = 0;
       GET_CQUEST(to, i) = 0;
@@ -4717,6 +4782,7 @@ SPECIAL(quest_debug_scanner)
 
   // WHERE debugger.
   if (CMD_IS("where")) {
+    mudlog_vfprintf(ch, LOG_WIZLOG, "%s using tricorder-enhanced WHERE to view all PC locations.", GET_CHAR_NAME(ch));
     send_to_char("^RUsing extended WHERE due to you holding a diagnostic scanner.^n\r\n", ch);
 
     struct room_data *room;
@@ -4736,7 +4802,7 @@ SPECIAL(quest_debug_scanner)
         if (IS_NPC(tch))
           continue;
 
-        send_to_char(ch, "%-20s - in %s at [%6ld] %s^n\r\n", GET_CHAR_NAME(tch), GET_VEH_NAME(veh), room ? GET_ROOM_VNUM(room) : -1, room ? GET_ROOM_NAME(room) : "nowhere");
+        send_to_char(ch, "%-20s - in %s^n at [%6ld] %s^n\r\n", GET_CHAR_NAME(tch), GET_VEH_NAME(veh), room ? GET_ROOM_VNUM(room) : -1, room ? GET_ROOM_NAME(room) : "nowhere");
       }
     }
 
@@ -5431,6 +5497,12 @@ SPECIAL(chargen_untrain_attribute)
     return TRUE;
   }
 
+  if (IS_OTAKU(ch) && GET_CHANNEL_POINTS(ch) < ((GET_REAL_INT(ch) + GET_REAL_WIL(ch) + GET_REAL_CHA(ch) + 2) / 3)) {
+    // Otaku channel skills have been spent.
+    send_to_char("You cannot untrain attributes while you have channel skills allocated.\r\n", ch);
+    return TRUE;
+  }
+
   if (is_abbrev(argument, "body")) {
     untrain_attribute(ch, BOD, "You determinedly chow down on junk food for a week and decrease your Body to %d.\r\n");
     return TRUE;
@@ -5515,8 +5587,22 @@ SPECIAL(chargen_unpractice_skill)
       return TRUE;
     }
 
-    // Success. Lower the skill by one point.
-    GET_SKILL_POINTS(ch)++;
+    // Special otaku catch for channel pointed skills
+    if (skills[skill_num].requires_resonance) {
+      int spent_points = 0;
+      int max_channel_points = (GET_REAL_INT(ch) + GET_REAL_WIL(ch) + GET_REAL_CHA(ch) + 2) / 3;
+      for (int ci=SKILL_CHANNEL_ACCESS; ci <= SKILL_CHANNEL_SLAVE;ci++) {
+        spent_points += REAL_SKILL(ch, ci);
+      }
+      if (spent_points <= max_channel_points) {
+        GET_CHANNEL_POINTS(ch)++;
+      } else {
+        GET_SKILL_POINTS(ch)++;
+      }
+    }
+    else
+      GET_SKILL_POINTS(ch)++;
+
     set_character_skill(ch, skill_num, REAL_SKILL(ch, skill_num) - 1, FALSE);
 
     if (GET_SKILL(ch, skill_num) == 0) {
@@ -5605,6 +5691,44 @@ SPECIAL(chargen_skill_annex) {
       send_to_char(ch, "You still have %d skill point%s to spend! You should finish ^WPRACTICE^n-ing your skills before you proceed.\r\n",
                    GET_SKILL_POINTS(ch), GET_SKILL_POINTS(ch) > 1 ? "s" : "");
       return TRUE;
+    }
+
+    if (GET_CHANNEL_POINTS(ch) > 0) {
+      send_to_char(ch, "You still have %d channel skill point%s to spend! You should finish ^WPRACTICE^n-ing your otaku skills before you proceed.\r\n",
+                   GET_CHANNEL_POINTS(ch), GET_CHANNEL_POINTS(ch) > 1 ? "s" : "");
+      return TRUE;
+    }
+
+    if (IS_OTAKU(ch)) {
+      bool is_error = FALSE;
+      if (GET_SKILL(ch, SKILL_COMPUTER) < 6) {
+        send_to_char(ch, "Otakus must have at least a rating 6 in Computers, but your proficiency is only %d. You should ^WPRACTICE^n your Computers before proceeding.\r\n",
+          GET_SKILL(ch, SKILL_COMPUTER));
+        is_error = TRUE;
+      }
+
+      for (int i = SKILL_CORPORATE_ETIQUETTE; i <= SKILL_ELF_ETIQUETTE; i++) {
+        if (GET_SKILL(ch, i) > 4) {
+          send_to_char(ch, "Otaku cannot have an etiquette skill higher than 4. You should ^WUNPRACTICE^n your %s before proceeding.\r\n", skills[i].name);
+          is_error = TRUE;
+        }
+      }
+
+      if (is_error) return is_error;
+
+      // Block specific to chargen otaku
+      // Otaku channel skills are limited to 6, 5, 4, 3, 3 max.
+      for (int ci=SKILL_CHANNEL_ACCESS; ci <= SKILL_CHANNEL_SLAVE;ci++) {
+        if (REAL_SKILL(ch, ci) <= 3) continue;
+        for (int csi=SKILL_CHANNEL_ACCESS; csi <= SKILL_CHANNEL_SLAVE;csi++) {
+          if (csi == ci) continue; // skip checking the parent skill against itself.
+          if (REAL_SKILL(ch, csi) == REAL_SKILL(ch, ci)) {
+            send_to_char(ch, "You cannot have more than one channel skill at %d for otaku at character generation. Otaku channel skills cannot exceed 6, 5, 4, 3, 3 ratings in chargen. Please reduce the value of %s.\r\n",
+              REAL_SKILL(ch, ci), skills[ci].name);
+            return TRUE;
+          }
+        }
+      }
     }
   }
 
@@ -6941,7 +7065,7 @@ SPECIAL(nerpcorpolis_lobby) {
     char_to_room(ch, &world[real_room(RM_NERPCORPOLIS_RECEPTIONIST)]);
 
     send_to_char("You are ushered into the leasing office.\r\n", ch);
-    act("$n is ushered into the leasing office.", FALSE, ch, 0, 0, TO_ROOM);
+    act("$N is ushered into the leasing office.", FALSE, 0, 0, ch, TO_NOTVICT);
 
     // If not screenreader, look.
     if (!PRF_FLAGGED(ch, PRF_SCREENREADER))
@@ -7828,9 +7952,7 @@ SPECIAL(oppressive_atmosphere) {
   if (CMD_IS("west") || CMD_IS("w")) {
     snprintf(ENDOF(check_failure_message), sizeof(check_failure_message) - strlen(check_failure_message), " - [%6s^n] You must have at least ^c%d^n TKE to enter.\r\n",
              (you_shall_not_pass |= (GET_TKE(ch) < OA_TKE_REQUIREMENT)) ? "^RFAIL" : "^g OK ",
-             OA_TKE_REQUIREMENT);
-
-    
+             OA_TKE_REQUIREMENT);    
 
     // Evaluate their stats. You must be at racial maximum in all stats to proceed.
     {
@@ -7842,7 +7964,7 @@ SPECIAL(oppressive_atmosphere) {
           continue;
 
         // Turn folks away who are under spec.
-        if (GET_REAL_ATT(ch, stat_idx) < racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][stat_idx]) {
+        if (GET_REAL_ATT(ch, stat_idx) < get_attr_max(ch, stat_idx)) {
           stats_ok = FALSE;
           you_shall_not_pass = TRUE;
           break;
@@ -7853,14 +7975,15 @@ SPECIAL(oppressive_atmosphere) {
                " - [%s^n] You must have trained all stats except Charisma to their racial maximums.\r\n",
                !stats_ok ? "^RFAIL" : "^g OK ");
     }
-    
 
     // You must have at least one combat skill at 8.
     {
       bool has_combat_skill = GET_SKILL(ch, SKILL_SORCERY) >= OA_COMBAT_SKILL_REQ;
       for (int weap_idx = WEAP_EDGED; !has_combat_skill && weap_idx < MAX_WEAP; weap_idx++) {
-        if (GET_SKILL(ch, kosher_weapon_values[weap_idx].skill) >= OA_COMBAT_SKILL_REQ)
+        if (GET_SKILL(ch, kosher_weapon_values[weap_idx].skill) >= OA_COMBAT_SKILL_REQ) {
           has_combat_skill = TRUE;
+          break;
+        }
       }
       if (!has_combat_skill) {
         you_shall_not_pass = TRUE;
@@ -7883,11 +8006,41 @@ SPECIAL(oppressive_atmosphere) {
   return FALSE;
 }
 
+SPECIAL(cas_gatekeeper)
+{
+  NO_DRAG_BULLSHIT;
+
+  struct char_data *bouncer = (char_data *) me;
+  struct obj_data *obj;
+
+  if (!AWAKE(ch) || (GET_POS(ch) == POS_FIGHTING))
+    return(FALSE);
+
+  if (CMD_IS("east")) {
+    bool has_101267 = FALSE;
+    bool has_101268 = FALSE;
+    for (obj = ch->carrying; obj; obj = obj->next_content) {
+      has_101267 |= (GET_OBJ_VNUM(obj) == 101267);
+      has_101268 |= (GET_OBJ_VNUM(obj) == 101268);
+    }
+
+    if ((has_101267 && has_101268) || IS_NPC(ch) || access_level(ch, LVL_ADMIN))
+      perform_move(ch, EAST, LEADER, NULL);
+    else
+      do_say(bouncer, "Not today, chummer.", 0, 0);
+    return(TRUE);
+  }
+
+  return(FALSE);
+}
+
 #define GATEKEEPER_A_CODEWORD "the game is more fun if you don't try to look things up like this"
 #define GATEKEEPER_B_CODEWORD "the game is more fun if you don't try to look things up like this"
 #define GATEKEEPER_C_CODEWORD "the game is more fun if you don't try to look things up like this"
 SPECIAL(grenada_gatekeeper)
 {
+  NO_DRAG_BULLSHIT;
+
   struct char_data *mob = (struct char_data *) me;
   if (!AWAKE(mob))
     return FALSE;
@@ -7961,7 +8114,7 @@ SPECIAL(grenada_gatekeeper)
       char_from_room(ch);
       char_to_room(ch, &world[to_room]);
 
-      act("$n is ushered in.", FALSE, ch, NULL, mob, TO_ROOM);
+      act("$N is ushered in.", FALSE, NULL, NULL, ch, TO_NOTVICT);
 
       if (!PRF_FLAGGED(ch, PRF_SCREENREADER)) {
         look_at_room(ch, 0, 0);

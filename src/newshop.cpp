@@ -299,17 +299,11 @@ bool uninstall_ware_from_target_character(struct obj_data *obj, struct char_data
 
   if (GET_OBJ_TYPE(obj) == ITEM_BIOWARE) {
     obj_from_bioware(obj);
-    GET_INDEX(victim) -= GET_BIOWARE_ESSENCE_COST(obj);
-    // Drakes have doubled bioware costs.
-    if (IS_DRAKE(victim))
-      GET_INDEX(victim) -= GET_BIOWARE_ESSENCE_COST(obj);
+    GET_INDEX(victim) -= calculate_ware_essence_or_index_cost(victim, obj);
     GET_INDEX(victim) = MAX(0, GET_INDEX(victim));
   } else {
     obj_from_cyberware(obj);
-    GET_ESSHOLE(victim) += GET_CYBERWARE_ESSENCE_COST(obj);
-    // Ghouls and drakes have doubled cyberware costs.
-    if (IS_GHOUL(victim) || IS_DRAKE(victim))
-      GET_ESSHOLE(victim) += GET_CYBERWARE_ESSENCE_COST(obj);
+    GET_ESSHOLE(victim) += calculate_ware_essence_or_index_cost(victim, obj);
   }
 
   if (!IS_NPC(remover)) {
@@ -435,12 +429,7 @@ bool install_ware_in_target_character(struct obj_data *ware, struct char_data *i
 
   // Reject installing magic-incompat 'ware into magic-using characters.
   if (GET_OBJ_TYPE(ware) == ITEM_CYBERWARE) {
-    int esscost = GET_CYBERWARE_ESSENCE_COST(ware);
-    if (GET_TRADITION(recipient) == TRAD_SHAMANIC && GET_TOTEM(recipient) == TOTEM_EAGLE)
-      esscost *= 2;
-    // Ghouls and drakes have doubled cyberware essence costs.
-    if (IS_GHOUL(recipient) || IS_DRAKE(recipient))
-      esscost *= 2;
+    int esscost = calculate_ware_essence_or_index_cost(recipient, ware);
 
     // Check to see if the operation is even possible with their current essence / hole.
     if (GET_REAL_ESS(recipient) + GET_ESSHOLE(recipient) <= esscost) {
@@ -564,10 +553,7 @@ bool install_ware_in_target_character(struct obj_data *ware, struct char_data *i
 
   // You must have the index to support it.
   else if (GET_OBJ_TYPE(ware) == ITEM_BIOWARE) {
-    int esscost = GET_BIOWARE_ESSENCE_COST(ware);
-    // Drakes have doubled bioware index losses.
-    if (IS_DRAKE(recipient))
-      esscost *= 2;
+    int esscost = calculate_ware_essence_or_index_cost(recipient, ware);
     if (GET_INDEX(recipient) + esscost > 900) {
       if (IS_NPC(installer)) {
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), " That operation would kill you!");
@@ -1672,7 +1658,7 @@ void shop_list(char *arg, struct char_data *ch, struct char_data *keeper, vnum_t
       if (shop_table[shop_nr].flags.IsSet(SHOP_DOCTOR)) {
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "; it's %s that costs %.2f %s",
                 GET_OBJ_TYPE(obj) == ITEM_CYBERWARE ? "cyberware" : "bioware",
-                ((float)GET_OBJ_VAL(obj, 4) / 100),
+                ((float)calculate_ware_essence_or_index_cost(ch, obj) / 100),
                 GET_OBJ_TYPE(obj) == ITEM_CYBERWARE ? "essence" : "bio index");
 
       }
@@ -2927,7 +2913,7 @@ void shedit_parse(struct descriptor_data *d, const char *arg)
     case 'y':
     case 'Y':
 #ifdef ONLY_LOG_BUILD_ACTIONS_ON_CONNECTED_ZONES
-      if (!vnum_from_non_connected_zone(d->edit_number)) {
+      if (!vnum_from_non_approved_zone(d->edit_number)) {
 #else
       {
 #endif
@@ -3714,9 +3700,9 @@ bool shop_will_buy_item_from_ch(rnum_t shop_nr, struct obj_data *obj, struct cha
   }
 
   // Item is not from a connected zone.
-  if (vnum_from_non_connected_zone(GET_OBJ_VNUM(obj))) {
+  if (vnum_from_non_approved_zone(GET_OBJ_VNUM(obj))) {
     char oopsbuf[1000];
-    snprintf(oopsbuf, sizeof(oopsbuf), "BUILD ERROR: Somehow %s got %s^n (%ld) which is from a non-connected zone.",
+    snprintf(oopsbuf, sizeof(oopsbuf), "BUILD ERROR: Somehow %s got %s^n (%ld) which is from a non-approved zone.",
              GET_CHAR_NAME(ch),
              GET_OBJ_NAME(obj),
              GET_OBJ_VNUM(obj));

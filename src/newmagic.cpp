@@ -216,7 +216,7 @@ void end_sustained_spell(struct char_data *ch, struct sustain_data *sust)
   delete sust;
 
   // Handle heal.
-  if (spell_is_heal) {
+  if (spell_is_heal && other) {
     AFF_FLAGS(other).RemoveBit(AFF_HEALED);
     update_pos(other, TRUE);
     if (GET_POS(other) == POS_MORTALLYW) {
@@ -549,6 +549,10 @@ void totem_bonus(struct char_data *ch, int action, int type, int &target, int &s
         else if (type == ILLUSION)
           skill -= 1;
         break;
+      case TOTEM_DRAGON:
+        if (type == DETECTION || type == MANIPULATION)
+          skill += 2;
+        break;
     }
   } else if (action == CONJURING)
   {
@@ -721,6 +725,10 @@ void totem_bonus(struct char_data *ch, int action, int type, int &target, int &s
     case TOTEM_WILDHUNTSMAN:
       if (type == SPIRIT_STORM)
         skill += 2;
+      break;
+    case TOTEM_DRAGON:
+      if (type == SPIRIT_MOUNTAIN)
+        skill += 1;
       break;
     }
   }
@@ -6894,9 +6902,13 @@ ACMD(do_think)
 
   // We don't show communication mindlinks to privileged folks.
   snprintf(buf, sizeof(buf), "^rYou hear $v^r in your mind say, \"%s^r\"^n", formatted_think_string);
-  if (!IS_IGNORING(ch->char_specials.mindlink, is_blocking_mindlinks_from, ch))
+  if (!IS_IGNORING(ch->char_specials.mindlink, is_blocking_mindlinks_from, ch)) {
     act(buf, FALSE, ch, 0, ch->char_specials.mindlink, TO_VICT);
+    store_message_to_history(ch->char_specials.mindlink->desc, COMM_CHANNEL_SAYS, buf);
+  }
+
   send_to_char(ch, "You think across your mindlink^n, \"%s^n\"\r\n", formatted_think_string);
+  store_message_to_history(ch->desc, COMM_CHANNEL_SAYS, buf);
 }
 
 int get_spell_affected_successes(struct char_data * ch, int type)

@@ -74,6 +74,7 @@
 #include "moderation.hpp"
 #include "newhouse.hpp"
 #include "factions.hpp"
+#include "player_exdescs.hpp"
 
 
 const unsigned perfmon::kPulsePerSecond = PASSES_PER_SEC;
@@ -352,7 +353,7 @@ void copyover_recover()
     }
 
     /* create a new descriptor */
-    CREATE(d, struct descriptor_data, 1);
+    d = new descriptor_data;
     memset ((char *) d, 0, sizeof (struct descriptor_data));
     init_descriptor (d,desc); /* set up various stuff */
 
@@ -2115,7 +2116,6 @@ int process_input(struct descriptor_data *t) {
     if (space_left <= 0) {
       if (t->character) {
         log_vfprintf("process_input: about to close connection: input overflow from %s (%ld)", GET_CHAR_NAME(t->character), GET_IDNUM(t->character));
-        extract_char(t->character);
       }
       return -1;
     }
@@ -2132,7 +2132,6 @@ int process_input(struct descriptor_data *t) {
           char errbuf[1000];
           snprintf(errbuf, sizeof(errbuf), "process_input: about to lose connection from %s (%ld)", GET_CHAR_NAME(t->character), GET_IDNUM(t->character));
           perror(errbuf);
-          extract_char(t->character);
         } else {
           perror("process_input: about to lose connection");
         }
@@ -2375,8 +2374,6 @@ void free_editing_structs(descriptor_data *d, int state)
     DELETE_AND_NULL_ARRAY(d->edit_zon);
   }
 
-  DELETE_IF_EXTANT(d->edit_cmd);
-
   if (d->edit_veh) {
     Mem->DeleteVehicle(d->edit_veh);
     d->edit_veh = NULL;
@@ -2390,17 +2387,13 @@ void free_editing_structs(descriptor_data *d, int state)
     d->edit_icon = NULL;
   }
 
-  if (d->edit_faction) {
-    delete d->edit_faction;
-    d->edit_faction = NULL;
-  }
-
-#define DELETE_EDITING_INFO(field) { if ((field)) { delete (field); (field) = NULL; }}
-  DELETE_EDITING_INFO(d->edit_pgroup);
-  DELETE_EDITING_INFO(d->edit_complex);
-  DELETE_EDITING_INFO(d->edit_apartment);
-  DELETE_EDITING_INFO(d->edit_apartment_room);
-#undef DELETE_EDITING_INFO
+  DELETE_IF_EXTANT(d->edit_cmd);
+  DELETE_IF_EXTANT(d->edit_faction);
+  DELETE_IF_EXTANT(d->edit_pgroup);
+  DELETE_IF_EXTANT(d->edit_complex);
+  DELETE_IF_EXTANT(d->edit_apartment);
+  DELETE_IF_EXTANT(d->edit_apartment_room);
+  DELETE_IF_EXTANT(d->edit_exdesc);
 }
 
 void close_socket(struct descriptor_data *d)
@@ -2521,13 +2514,14 @@ void close_socket(struct descriptor_data *d)
         d->character->persona = NULL;
         PLR_FLAGS(d->character).RemoveBit(PLR_MATRIX);
       }
+      clear_hitcher(d->character, TRUE);
       free_editing_structs(d, STATE(d));
       d->character->desc = NULL;
     } else {
-      snprintf(buf, sizeof(buf), "Cleaning up data structures from %s's disconnection (state %d).",
-              GET_CHAR_NAME(d->character) ? GET_CHAR_NAME(d->character) : "<null>",
-              d->connected);
-      mudlog(buf, d->character, LOG_CONNLOG, TRUE);
+      mudlog_vfprintf(d->character, LOG_SYSLOG, "Cleaning up data structures from %s's disconnection (state %d aka '%s').",
+                      GET_CHAR_NAME(d->character) ? GET_CHAR_NAME(d->character) : "<null>",
+                      d->connected,
+                      d->connected >= 0 && d->connected <= CON_MAX ? connected_types[d->connected] : "OUT OF RANGE");
       // we do this because objects can be given to characters in chargen
       for (int i = 0; i < NUM_WEARS; i++)
         if (GET_EQ(d->character, i))
@@ -2572,7 +2566,7 @@ void close_socket(struct descriptor_data *d)
   // Clean up message history lists.
   delete_message_history(d);
 
-  free(d);
+  delete d;
 }
 
 void check_idle_passwords(void)
@@ -2632,6 +2626,9 @@ void shutdown(int code)
 {
   circle_shutdown = true;
   exit_code = code;
+
+  log("Received SHUTDOWN command: Clearing alarm handler.");
+  signal(SIGALRM, SIG_IGN);
 }
 
 /* ******************************************************************
@@ -2896,7 +2893,7 @@ void send_to_host(vnum_t room, const char *messg, struct matrix_icon *icon, bool
   }
 }
 
-void send_to_veh(const char *messg, struct veh_data *veh, struct char_data *ch, bool torig, ...)
+void send_to_veh(const char *messg, struct veh_data *veh, struct char_data *ch, bool torig, bool is_ignorable_spam, ...)
 {
   struct char_data *i;
 
@@ -2919,7 +2916,7 @@ void send_to_veh(const char *messg, struct veh_data *veh, struct char_data *ch, 
   }
 }
 
-void send_to_veh(const char *messg, struct veh_data *veh, struct char_data *ch, struct char_data *cha, bool torig)
+void send_to_veh(const char *messg, struct veh_data *veh, struct char_data *ch, struct char_data *cha, bool torig, bool is_ignorable_spam)
 {
   struct char_data *i;
 
@@ -2934,15 +2931,15 @@ void send_to_veh(const char *messg, struct veh_data *veh, struct char_data *ch, 
   {
     for (i = veh->people; i; i = i->next_in_veh)
       if (i != ch && i != cha && i->desc) {
-        if (!(!torig && AFF_FLAGGED(i, AFF_RIG)))
+        if (!(is_ignorable_spam && PRF_FLAGGED(i, PRF_NOTRAFFIC)) && !(!torig && AFF_FLAGGED(i, AFF_RIG)))
           SEND_TO_Q(messg, i->desc);
       }
-    if (torig && veh->rigger && veh->rigger->desc)
+    if (torig && veh->rigger && veh->rigger->desc && !(is_ignorable_spam && PRF_FLAGGED(veh->rigger, PRF_NOTRAFFIC)))
       SEND_TO_Q(messg, veh->rigger->desc);
   }
 }
 
-void send_to_room(const char *messg, struct room_data *room, struct veh_data *exclude_veh)
+void send_to_room(const char *messg, struct room_data *room, struct veh_data *exclude_veh, bool is_ignorable_spam)
 {
   struct char_data *i;
   struct veh_data *v;
@@ -2950,7 +2947,7 @@ void send_to_room(const char *messg, struct room_data *room, struct veh_data *ex
   if (messg && room) {
     for (i = room->people; i; i = i->next_in_room) {
       if (i->desc)
-        if (!(PLR_FLAGGED(i, PLR_REMOTE) || PLR_FLAGGED(i, PLR_MATRIX)) && AWAKE(i))
+        if (!(is_ignorable_spam && PRF_FLAGGED(i, PRF_NOTRAFFIC)) && !(PLR_FLAGGED(i, PLR_REMOTE) || PLR_FLAGGED(i, PLR_MATRIX)) && AWAKE(i))
           SEND_TO_Q(messg, i->desc);
 
       if (i == i->next_in_room) {
@@ -2992,6 +2989,14 @@ char* strip_ending_punctuation_new(const char* orig) {
 const char *get_voice_perceived_by(struct char_data *speaker, struct char_data *listener, bool invis_staff_should_be_identified) {
   static char voice_buf[500];
   struct remem *mem = NULL;
+
+  if (!speaker || !listener) {
+    mudlog_vfprintf(speaker, LOG_SYSLOG, "SYSERR: Got call to get_voice_perceived_by(%s, %s, %s) with invalid parameter(s).",
+                    GET_CHAR_NAME(speaker),
+                    GET_CHAR_NAME(listener),
+                    invis_staff_should_be_identified ? "TRUE" : "FALSE");
+    return ACTNULL;
+  }
 
   if (IS_NPC(speaker))
     return GET_NAME(speaker);
@@ -3041,6 +3046,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
   char *buf;
   struct char_data *vict;
   static char lbuf[MAX_STRING_LENGTH];
+  static char possessive_buf[1000];
   char temp_buf[MAX_STRING_LENGTH];
   buf = lbuf;
   vict = (struct char_data *) vict_obj;
@@ -3071,7 +3077,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
         case 'e':
           if (to == ch && !skip_you_stanzas)
             i = "you";
-          else if (CAN_SEE(to, ch))
+          else if (ch && CAN_SEE(to, ch))
             i = HSSH(ch);
           else
             i = "it";
@@ -3080,7 +3086,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
           if (vict_obj) {
             if (to == vict && !skip_you_stanzas)
               i = "you";
-            else if (CAN_SEE(to, vict))
+            else if (vict && CAN_SEE(to, vict))
               i = HSSH(vict);
             else
               i = "it";
@@ -3092,7 +3098,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
         case 'm':
           if (to == ch && !skip_you_stanzas)
             i = "you";
-          else if (CAN_SEE(to, ch))
+          else if (ch && CAN_SEE(to, ch))
             i = HMHR(ch);
           else
             i = "them";
@@ -3102,7 +3108,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
             i = "someone";
           else if (to == vict && !skip_you_stanzas)
             i = "you";
-          else if (CAN_SEE(to, vict))
+          else if (vict && CAN_SEE(to, vict))
             i = HMHR(vict);
           else
             i = "them";
@@ -3110,9 +3116,9 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
         case 'n':
           if (to == ch && !skip_you_stanzas)
             i = "you";
-          else if (!IS_NPC(ch) && (IS_SENATOR(to) || IS_SENATOR(ch)))
+          else if (ch && !IS_NPC(ch) && (IS_SENATOR(to) || IS_SENATOR(ch)))
             i = GET_CHAR_NAME(ch);
-          else if (CAN_SEE(to, ch)) {
+          else if (ch && CAN_SEE(to, ch)) {
             if (AFF_FLAGGED(ch, AFF_RIG) || PLR_FLAGGED(ch, PLR_REMOTE)) {
               struct veh_data *veh;
               RIG_VEH(ch, veh);
@@ -3129,9 +3135,9 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
             i = "someone";
           else if (to == vict && !skip_you_stanzas)
             i = "you";
-          else if (!IS_NPC(vict) && (IS_SENATOR(to) || IS_SENATOR(vict)))
+          else if (vict && !IS_NPC(vict) && (IS_SENATOR(to) || IS_SENATOR(vict)))
             i = GET_CHAR_NAME(vict);
-          else if (CAN_SEE(to, vict)) {
+          else if (vict && CAN_SEE(to, vict)) {
             if (AFF_FLAGGED(vict, AFF_RIG) || PLR_FLAGGED(vict, PLR_REMOTE)) {
               struct veh_data *veh;
               RIG_VEH(vict, veh);
@@ -3155,10 +3161,54 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
         case 'P':
           i = CHECK_NULL(vict_obj, OBJS((struct obj_data *) vict_obj, to));
           break;
+        case 'q':
+          if (to == ch && !skip_you_stanzas)
+            i = "your";
+          else if (ch && !IS_NPC(ch) && (IS_SENATOR(to) || IS_SENATOR(ch))) {
+            snprintf(possessive_buf, sizeof(possessive_buf), "%s's", GET_CHAR_NAME(ch));
+            i = possessive_buf;
+          }
+          else if (ch && CAN_SEE(to, ch)) {
+            if (AFF_FLAGGED(ch, AFF_RIG) || PLR_FLAGGED(ch, PLR_REMOTE)) {
+              struct veh_data *veh;
+              RIG_VEH(ch, veh);
+              snprintf(possessive_buf, sizeof(possessive_buf), "%s's", GET_VEH_NAME(veh));
+              i = possessive_buf;
+            } else {
+              snprintf(possessive_buf, sizeof(possessive_buf), "%s's", make_desc(to, ch, temp_buf, TRUE, TRUE, sizeof(temp_buf)));
+              i = possessive_buf;
+            }
+          }
+          else
+            i = "someone's";
+          break;
+        case 'Q':
+          if (!vict)
+            i = "someone's";
+          else if (to == vict && !skip_you_stanzas)
+            i = "your";
+          else if (vict && !IS_NPC(vict) && (IS_SENATOR(to) || IS_SENATOR(vict))) {
+            snprintf(possessive_buf, sizeof(possessive_buf), "%s's", GET_CHAR_NAME(ch));
+            i = possessive_buf;
+          }
+          else if (vict && CAN_SEE(to, vict)) {
+            if (AFF_FLAGGED(vict, AFF_RIG) || PLR_FLAGGED(vict, PLR_REMOTE)) {
+              struct veh_data *veh;
+              RIG_VEH(vict, veh);
+              snprintf(possessive_buf, sizeof(possessive_buf), "%s's", GET_VEH_NAME(veh));
+              i = possessive_buf;
+            } else {
+              snprintf(possessive_buf, sizeof(possessive_buf), "%s's", make_desc(to, vict, temp_buf, TRUE, TRUE, sizeof(temp_buf)));
+              i = possessive_buf;
+            }
+          }
+          else
+            i = "someone's";
+          break;
         case 's':
           if (to == ch && !skip_you_stanzas)
             i = "your";
-          else if (CAN_SEE(to, ch))
+          else if (ch && CAN_SEE(to, ch))
             i = HSHR(ch);
           else
             i = "their";
@@ -3168,7 +3218,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
             i = "someone's";
           else if (to == vict && !skip_you_stanzas)
             i = "your";
-          else if (CAN_SEE(to, vict))
+          else if (vict && CAN_SEE(to, vict))
             i = HSHR(vict);
           else
             i = "their";
@@ -3177,7 +3227,7 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
           i = CHECK_NULL(vict_obj, (char *) vict_obj);
           break;
         case 'v': /* Just voice */
-          i = get_voice_perceived_by(ch, to, FALSE);
+          i = CHECK_NULL(ch, get_voice_perceived_by(ch, to, FALSE));
           break;
         case 'z': /* Desc if visible, voice if not */
           // You always know if it's you.
@@ -3185,27 +3235,31 @@ const char *perform_act(const char *orig, struct char_data * ch, struct obj_data
             i = "you";
           }
 
-          // Staff ignore visibility checks.
-          else if (IS_SENATOR(to)) {
-            if (!IS_NPC(ch)) {
-              i = GET_CHAR_NAME(ch);
-            } else {
+          else if (ch) {
+            // Staff ignore visibility checks.
+            if (IS_SENATOR(to)) {
+              if (!IS_NPC(ch)) {
+                i = GET_CHAR_NAME(ch);
+              } else {
+                i = make_desc(to, ch, temp_buf, TRUE, TRUE, sizeof(temp_buf));
+              }
+            }
+
+            // If they're visible, it's simple.
+            else if (CAN_SEE(to, ch))
               i = make_desc(to, ch, temp_buf, TRUE, TRUE, sizeof(temp_buf));
-            }
-          }
 
-          // If they're visible, it's simple.
-          else if (CAN_SEE(to, ch))
-            i = make_desc(to, ch, temp_buf, TRUE, TRUE, sizeof(temp_buf));
-
-          // If we've gotten here, the speaker is an invisible player or staff member.
-          else {
-            // Since $z is only used for speech, and since NPCs can't be remembered, we display their name when NPCs speak.
-            if (IS_NPC(ch))
-              i = GET_NAME(ch);
+            // If we've gotten here, the speaker is an invisible player or staff member.
             else {
-              i = get_voice_perceived_by(ch, to, TRUE);
+              // Since $z is only used for speech, and since NPCs can't be remembered, we display their name when NPCs speak.
+              if (IS_NPC(ch))
+                i = GET_NAME(ch);
+              else {
+                i = get_voice_perceived_by(ch, to, TRUE);
+              }
             }
+          } else {
+            i = ACTNULL;
           }
           break;
         case '$':
@@ -3238,8 +3292,31 @@ bool can_send_act_to_target(struct char_data *ch, bool hide_invisible, struct ob
     type &= ~TO_REMOTE;
 
   // Nobody unique to send to? Fail.
-  if (!to || !SENDOK(to) || to == ch)
+  if (!to || !SENDOK(to))
     return FALSE;
+
+#ifdef USE_NEW_ACT_TO_TARGET_LOGIC
+  // Type precondition failure check
+  switch (type) {
+    case TO_NOTVICT:
+      if (vict_obj && to == vict_obj) {
+        return FALSE;
+      }
+      break;
+    case TO_VICT:
+      if (vict_obj && to != vict_obj) {
+        return FALSE;
+      }
+      break;
+    default:
+      if (ch == to)
+        return FALSE;
+      break;
+  }
+#else
+  if (ch == to)
+    return FALSE;
+#endif
 
   // Can't see them and it's an action-based message? Fail.
   if (hide_invisible && ch && !CAN_SEE(to, ch))

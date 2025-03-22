@@ -25,6 +25,7 @@
 #include "redit.hpp"
 #include "newmail.hpp"
 #include "metrics.hpp"
+#include "pets.hpp"
 
 // extern vars
 extern class helpList Help;
@@ -241,6 +242,7 @@ void objList::UpdateObjsIDelete(const struct obj_data *proto, int rnum, int new_
 
 // this function runs through the list and checks the timers of each
 // object, extracting them if their timers hit 0
+unsigned long global_pet_act_tick = 0;
 void objList::UpdateCounters(void)
 {
   PERF_PROF_SCOPE(updatecounters_, __func__);
@@ -252,6 +254,7 @@ void objList::UpdateCounters(void)
   time_t timestamp_now = time(0);
 
   bool trideo_plays = (trideo_ticks++ % TRIDEO_TICK_DELAY == 0);
+  int pet_act_tick = (global_pet_act_tick++) % 10;
 
   if (trideo_plays) {
     // Select the trideo broadcast message we'll be using this tick.
@@ -271,6 +274,12 @@ void objList::UpdateCounters(void)
     // Precondition: The object being examined must exist.
     if (!OBJ) {
       mudlog("SYSERR: UpdateCounters encountered a non-existent object.", NULL, LOG_SYSLOG, TRUE);
+      continue;
+    }
+
+    // This is the only thing a pet object can do, so get it out of the way.
+    if (GET_OBJ_TYPE(OBJ) == ITEM_PET) {
+      pet_acts(OBJ, pet_act_tick);
       continue;
     }
 
@@ -297,7 +306,7 @@ void objList::UpdateCounters(void)
         act(buf, TRUE, 0, OBJ, 0, TO_ROOM);
         continue;
       }
-    } 
+    }
     
     // Decay evaluate programs. This only fires when they're completed, as non-finished software is ITEM_DESIGN instead.
     if (GET_OBJ_TYPE(OBJ) == ITEM_PROGRAM && GET_PROGRAM_TYPE(OBJ) == SOFT_EVALUATE) {
@@ -419,12 +428,14 @@ void objList::UpdateCounters(void)
     if (OBJ->in_room
         && (GET_OBJ_EXPIRATION_TIMESTAMP(OBJ) > 0 && GET_OBJ_EXPIRATION_TIMESTAMP(OBJ) <= timestamp_now)
         && !OBJ->contains // it's just a headache trying to figure out what to skip over with this
+        && !GET_OBJ_QUEST_CHAR_ID(OBJ)
         && !(zone_table[OBJ->in_room->zone].is_pghq
              || ((OBJ->restring || OBJ->photo) && GET_OBJ_TYPE(OBJ) != ITEM_GUN_AMMO) // No customized objects.
              || GET_OBJ_TYPE(OBJ) == ITEM_CREATIVE_EFFORT // No art.
              || GET_OBJ_TYPE(OBJ) == ITEM_DECK_ACCESSORY // No cookers, computers, etc.
              // || GET_OBJ_TYPE(OBJ) == ITEM_CUSTOM_DECK // No custom decks (only matters if !OBJ->contains condition is removed)
              || GET_OBJ_TYPE(OBJ) == ITEM_MAGIC_TOOL
+             || GET_OBJ_TYPE(OBJ) == ITEM_PET
              || (GET_OBJ_TYPE(OBJ) == ITEM_WORKSHOP && GET_WORKSHOP_GRADE(OBJ) > TYPE_KIT) // No workshops or facilities.
              // || GET_OBJ_TYPE(OBJ) == ITEM_SHOPCONTAINER // No shopcontainers (only matters if !OBJ->contains condition is removed)
              || (GET_OBJ_TYPE(OBJ) == ITEM_FOCUS && GET_FOCUS_BONDED_TO(OBJ) > 0) // No bonded normal foci.
@@ -432,6 +443,20 @@ void objList::UpdateCounters(void)
             )
         )
     {
+      // Don't steal food and drinks from bar scenes
+      bool do_delete = TRUE;
+      if ((GET_OBJ_TYPE(OBJ) == ITEM_FOOD || GET_OBJ_TYPE(OBJ) == ITEM_DRINKCON) && OBJ->in_room->people) {
+        for (struct char_data *tmp_ch = OBJ->in_room->people; tmp_ch; tmp_ch = tmp_ch->next_in_room) {
+          if (!IS_NPC(tmp_ch)) {
+            do_delete = FALSE;
+            break;
+          }
+        }
+      }
+      if (!do_delete) {
+        continue;
+      }
+
       const char *representation = generate_new_loggable_representation(OBJ);
 #ifndef EXPIRE_STRAY_ITEMS
       mudlog_vfprintf(NULL, LOG_MISCLOG, "Item %s @ %s (%ld) WOULD HAVE been cleaned up by expiration logic.", representation, GET_ROOM_NAME(OBJ->in_room), GET_ROOM_VNUM(OBJ->in_room));
@@ -653,10 +678,6 @@ void objList::CheckForDeletedCharacterFuckery(struct char_data *ch, const char *
         found_something = TRUE;
         continue;
       }
-    }
-
-    if (GET_OBJ_VNUM(OBJ) == 10025) {
-      mudlog_vfprintf(NULL, LOG_SYSLOG, "CFDCF debug: Found pocsec carried by %s", GET_CHAR_NAME(owner));
     }
   }
 

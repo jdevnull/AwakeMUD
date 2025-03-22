@@ -15,12 +15,24 @@
 #include "config.hpp"
 #include "ignore_system.hpp"
 #include "moderation.hpp"
+#include "pets.hpp"
+#include "otaku.hpp"
 
 #define PERSONA ch->persona
+#define PERSONA_CONDITION ch->persona->condition
 #define DECKER PERSONA->decker
 struct ic_info dummy_ic;
 
+extern struct otaku_echo echoes[];
+
 #define ICON_IS_IC(icon) (!(icon)->decker)
+
+#define HAS_HITCHER_JACK(deck) ([](struct obj_data *d) { \
+    for (struct obj_data *hitch = (d)->contains; hitch; hitch = hitch->next_content) \
+        if (GET_OBJ_TYPE(hitch) == ITEM_DECK_ACCESSORY && GET_OBJ_VAL(hitch, 0) == 1 && GET_OBJ_VAL(hitch, 1) == 3) \
+            return true; \
+    return false; \
+})(deck)
 
 extern void order_list(struct matrix_icon *start);
 extern void create_program(struct char_data *ch);
@@ -29,6 +41,7 @@ extern void create_deck(struct char_data *ch);
 extern void create_spell(struct char_data *ch);
 extern void create_ammo(struct char_data *ch);
 extern void create_art(struct char_data *ch);
+extern void create_complex_form(struct char_data *ch);
 
 ACMD_DECLARE(do_look);
 
@@ -50,6 +63,27 @@ void make_seen(struct matrix_icon *icon, int idnum)
   if (icon->decker->seen)
     seen->next = icon->decker->seen;
   icon->decker->seen = seen;
+}
+
+void clear_hitcher(struct char_data *ch, bool shouldNotify)
+{
+    // Safety check: ensure ch is valid and actually hitched to someone
+    if (!ch || !ch->hitched_to) {
+        return;
+    }
+
+    // Notify the hitcher if requested
+    if (shouldNotify) {
+        send_to_char("Your hitcher has disconnected.\r\n", ch->hitched_to);
+    }
+
+    // Clear references
+    if (ch->hitched_to->persona && ch->hitched_to->persona->decker)
+      ch->hitched_to->persona->decker->hitcher = NULL; // Super safety check. Clear functions should always be safe.
+    ch->hitched_to = NULL;
+
+    // Remove matrix flag
+    PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
 }
 
 struct obj_data * spawn_paydata(struct matrix_icon *icon) {
@@ -205,6 +239,10 @@ void roll_matrix_init(struct matrix_icon *icon)
     // Matrix pg 18 & 24, available bonuses are response increase, reality filter, and hot asist
     init_dice += GET_INIT_DICE(icon->decker->ch) + icon->decker->response + (icon->decker->reality ? 1 : 0) + (icon->decker->asist[0] ? 1 : 0);
 
+    if (icon->type == ICON_LIVING_PERSONA) {
+      init_dice = MIN(5, init_dice + GET_ECHO(icon->decker->ch, ECHO_OVERCLOCK));
+    }
+
     // Apply Matrix 'trode net cap (max init dice 2d6)
     if (GET_EQ(icon->decker->ch, WEAR_HEAD) && IS_OBJ_STAT(GET_EQ(icon->decker->ch, WEAR_HEAD), ITEM_EXTRA_TRODE_NET)) {
       init_dice = MIN(init_dice, 2);
@@ -252,6 +290,7 @@ bool tarbaby(struct obj_data *prog, struct char_data *ch, struct matrix_icon *ic
   int target = ic->ic.rating;
   if (matrix[ic->in_host].shutdown)
     target -= 2;
+  
   int suc = success_test(GET_OBJ_VAL(prog, 1), target);
   suc -= success_test(target, GET_OBJ_VAL(prog, 1));
   if (suc < 0)
@@ -260,7 +299,10 @@ bool tarbaby(struct obj_data *prog, struct char_data *ch, struct matrix_icon *ic
     send_to_icon(PERSONA, "%s^n crashes your %s^n!\r\n", CAP(ic->name), GET_OBJ_NAME(prog));
     DECKER->active += GET_OBJ_VAL(prog, 2);
     REMOVE_FROM_LIST(prog, DECKER->software, next_content);
-    if (ic->ic.type == IC_TARPIT && success_test(target, DECKER->mpcp + DECKER->hardening) > 0)
+    // Otaku complex forms cannot be destroyed from memory, so no problem there.
+    if (ic->ic.type == IC_TARPIT 
+      && !DECKER->deck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)
+      && success_test(target, DECKER->mpcp + DECKER->hardening) > 0)
       for (struct obj_data *copy = DECKER->deck->contains; copy; copy = copy->next_content) {
         if (!strcmp(GET_OBJ_NAME(copy), GET_OBJ_NAME(prog))) {
           send_to_icon(PERSONA, "It destroys all copies in storage memory as well!\r\n");
@@ -278,6 +320,8 @@ bool tarbaby(struct obj_data *prog, struct char_data *ch, struct matrix_icon *ic
 
 bool dumpshock(struct matrix_icon *icon)
 {
+  if (!icon) return FALSE;
+
   if (icon->decker && icon->decker->ch)
   {
     send_to_char(icon->decker->ch, "You are dumped from the matrix!\r\n");
@@ -303,7 +347,7 @@ bool dumpshock(struct matrix_icon *icon)
     }
 
     int resist = -success_test(GET_WIL(icon->decker->ch), matrix[icon->in_host].security);
-    int dam = convert_damage(stage(resist, matrix[icon->in_host].color));
+    int dam = convert_damage(stage(resist, MIN(matrix[icon->in_host].color + 1, DEADLY)));
 
     struct obj_data *jack = get_datajack(icon->decker->ch, FALSE);
 
@@ -334,12 +378,35 @@ bool dumpshock(struct matrix_icon *icon)
     extract_icon(icon);
     PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
 
+    // No reason to double-damage
+    if (!PLR_FLAGGED(ch, PLR_MATRIX))
+      return FALSE;
+    // If they're stunned or dead, there's no reason to take dumpshock damage.
+    if (GET_POS(ch) <= POS_STUNNED)
+      return FALSE; 
     if (damage(ch, ch, dam, TYPE_DUMPSHOCK, MENTAL))
       return TRUE;
   } else {
     extract_icon(icon);
   }
   return FALSE;
+}
+
+int get_detection_factor(struct char_data *ch)
+{
+  int detect = 0;
+  for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content)
+    if (GET_PROGRAM_TYPE(soft) == SOFT_SLEAZE) {
+      detect = GET_PROGRAM_RATING(soft);
+      break;
+    }
+  detect += DECKER->masking + 1; // +1 because we round up
+  detect = detect / 2;
+  detect -= DECKER->res_det;
+  if  (PERSONA->type == ICON_LIVING_PERSONA) {
+    detect += 1 + GET_ECHO(ch, ECHO_GHOSTING); // Otaku always get +1 DF
+  }
+  return detect;
 }
 
 int system_test(rnum_t host, struct char_data *ch, int type, int software, int modifier)
@@ -358,6 +425,38 @@ int system_test(rnum_t host, struct char_data *ch, int type, int software, int m
   }
 
   int target = HOST.stats[type][MTX_STAT_RATING];
+  if (PERSONA->type == ICON_LIVING_PERSONA) {
+    // We lower the TN by the channel rating
+    int channel_rating = GET_OTAKU_PATH(ch) == OTAKU_PATH_TECHNOSHAM ? 1 : 0;
+    switch(type) {
+      case ACIFS_ACCESS:
+        channel_rating += GET_SKILL(ch, SKILL_CHANNEL_ACCESS);
+        break;
+      case ACIFS_CONTROL:
+        channel_rating += GET_SKILL(ch, SKILL_CHANNEL_CONTROL);
+        break;
+      case ACIFS_FILES:
+        channel_rating += GET_SKILL(ch, SKILL_CHANNEL_FILES);
+        break;
+      case ACIFS_INDEX:
+        channel_rating += GET_SKILL(ch, SKILL_CHANNEL_INDEX);
+        break;
+      case ACIFS_SLAVE:
+        channel_rating += GET_SKILL(ch, SKILL_CHANNEL_SLAVE);
+        break;
+    }
+    target -= channel_rating;
+  } else {
+    // ... or by the appropriate decker utility program
+    for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content) {
+      if (GET_PROGRAM_TYPE(soft) == software) {
+        target -= GET_PROGRAM_RATING(soft);
+        buf_mod(rollbuf, sizeof(rollbuf), "soft", -GET_PROGRAM_RATING(soft));
+        prog = soft;  // for tarbaby/tarpit
+        break;
+      }
+    }
+  }
   snprintf(rollbuf, sizeof(rollbuf), "System test against %s with software %s: Starting TN %d", acifs_strings[type], programs[software].name, target);
 
   int skill = get_skill(ch, SKILL_COMPUTER, target) + MIN(GET_MAX_HACKING(ch), GET_REM_HACKING(ch));
@@ -378,19 +477,7 @@ int system_test(rnum_t host, struct char_data *ch, int type, int software, int m
   strlcat(rollbuf, ". Modifiers: ", sizeof(rollbuf));
   target += modify_target_rbuf_raw(ch, rollbuf, sizeof(rollbuf), 8, FALSE) + DECKER->res_test + (DECKER->ras ? 0 : 4);
 
-  for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content) {
-    if (GET_PROGRAM_TYPE(soft) == SOFT_SLEAZE)
-      detect = GET_PROGRAM_RATING(soft);
-    else if (!prog && GET_PROGRAM_TYPE(soft) == software) {
-      target -= GET_PROGRAM_RATING(soft);
-      buf_mod(rollbuf, sizeof(rollbuf), "soft", -GET_PROGRAM_RATING(soft));
-      prog = soft;
-    }
-  }
-
-  detect += DECKER->masking + 1; // +1 because we round up
-  detect = detect / 2;
-  detect -= DECKER->res_det;
+  detect = get_detection_factor(ch);
 
   int tally = MAX(0, success_test(HOST.security, detect));
   target = MAX(target, 2);
@@ -455,30 +542,59 @@ bool has_spotted(struct matrix_icon *icon, struct matrix_icon *targ)
   return FALSE;
 }
 
+// Assume that the target character has been deleted from memory if this returns TRUE.
+bool do_damage_persona(struct matrix_icon *targ, int dmg)
+{
+  if (targ->type == ICON_LIVING_PERSONA) {
+    // It's an otaku! They get to suffer MENTAL DAMAGE!
+    // targ->condition seems to be 1-10 scale, while ch mental wounds seems to be 1-100. Multiply by ten.
+
+    // damage() returns TRUE if the target has been deleted from memory, so when this function returns true, we must bail out of everything immediately.
+    if (damage(targ->decker->ch, targ->decker->ch, dmg, TYPE_BLACKIC, MENTAL))
+      return TRUE;
+
+    return FALSE;
+  }
+  targ->condition -= dmg;
+  return FALSE;
+}
+
 void fry_mpcp(struct matrix_icon *icon, struct matrix_icon *targ, int success)
 {
-  if (success >= 2 && targ->decker->deck)
-  {
-    if (targ->decker->ch && PLR_FLAGGED(targ->decker->ch, PLR_NEWBIE)) {
-      send_to_icon(targ, "(OOC message: Be careful with these enemies; your deck would have taken permanent damage if you weren't a newbie!)");
-      return;
-    }
-    snprintf(buf, sizeof(buf), "%s^n uses the opportunity to fry your MPCP!\r\n", CAP(icon->name));
-    send_to_icon(targ, buf);
-    while (success >= 2 && targ->decker->mpcp > 0) {
+  if (success < 2) return;
+  if (!targ->decker->deck) return;
+
+  if (targ->decker->deck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
+    // This is an otaku persona! MPCP damage works slightly different on otaku.
+    GET_CYBERDECK_MPCP(targ->decker->deck)--; // Damage the virtual deck.
+    
+    // MPCP damage always occurs to decker physical
+    while (success >= 2 && GET_PHYSICAL(targ->decker->ch) > 0) {
       success -= 2;
-      targ->decker->mpcp--;
-      GET_CYBERDECK_MPCP(targ->decker->deck)--;
+      damage(targ->decker->ch, targ->decker->ch, 1, TYPE_BLACKIC, PHYSICAL);
     }
-    // Damage the MPCP chip, if any.
-    for (struct obj_data *part = targ->decker->deck->contains; part; part = part->next_content) {
-      if (GET_OBJ_TYPE(part) == ITEM_PART && GET_PART_TYPE(part) == PART_MPCP) {
-        GET_PART_RATING(part) = GET_CYBERDECK_MPCP(targ->decker->deck);
-        GET_PART_TARGET_MPCP(part) = GET_CYBERDECK_MPCP(targ->decker->deck);
-        break;
-      }
-    }
+    return;
   }
+  
+  if (targ->decker->ch && PLR_FLAGGED(targ->decker->ch, PLR_NEWBIE)) {
+    send_to_icon(targ, "(OOC message: Be careful with these enemies; your deck would have taken permanent damage if you weren't a newbie!)");
+    return;
+  }
+  snprintf(buf, sizeof(buf), "%s^n uses the opportunity to fry your MPCP!\r\n", CAP(icon->name));
+  send_to_icon(targ, buf);
+  while (success >= 2 && targ->decker->mpcp > 0) {
+    success -= 2;
+    targ->decker->mpcp--;
+    GET_CYBERDECK_MPCP(targ->decker->deck)--;
+  }
+  // Damage the MPCP chip, if any.
+  for (struct obj_data *part = targ->decker->deck->contains; part; part = part->next_content) {
+    if (GET_OBJ_TYPE(part) == ITEM_PART && GET_PART_TYPE(part) == PART_MPCP) {
+      GET_PART_RATING(part) = GET_CYBERDECK_MPCP(targ->decker->deck);
+      GET_PART_TARGET_MPCP(part) = GET_CYBERDECK_MPCP(targ->decker->deck);
+      break;
+    }
+  }  
 }
 
 ACMD(do_fry_self) {
@@ -607,10 +723,36 @@ ACMD(do_matrix_position)
   WAIT_STATE(ch, (int) (DECKING_WAIT_STATE_TIME));
 }
 
+bool try_execute_shield_program(struct matrix_icon *icon, struct matrix_icon *targ, int &success)
+{
+  struct obj_data *soft = NULL, *temp = NULL;
+  if (!targ || !targ->decker) return FALSE; // IC don't have shields
+
+  for (soft = targ->decker->software; soft; soft = soft->next_content) {
+    if (GET_PROGRAM_TYPE(soft) == SOFT_SHIELD) {
+      int shield_test = success_test(GET_PROGRAM_RATING(soft), 
+        ICON_IS_IC(icon) ? matrix[icon->in_host].security : GET_SKILL(icon->decker->ch, SKILL_COMPUTER));
+
+      if (shield_test > 0) {
+        success -= shield_test;
+        send_to_icon(targ, "You raise your shield program and deflect some of the attack.\r\n");
+      }
+      GET_PROGRAM_RATING(soft)--;
+      if (GET_PROGRAM_RATING(soft) <= 0) {
+        send_to_icon(targ, "Your shield program crashes as the rating is depleted.\r\n");
+        REMOVE_FROM_LIST(soft, targ->decker->software, next_content);
+        extract_obj(soft);
+      }
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
 {
   struct obj_data *soft = NULL;
-  int target = 0, skill, bod = 0, dam = 0, power, success;
+  int target = 0, skill, bod = 0, dam = 0, icondam = 0, power, success;
   int iconrating = icon->ic.rating;
   if (!targ)
     return;
@@ -626,6 +768,12 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
   if (targ->decker && !has_spotted(targ, icon))
     make_seen(targ, icon->idnum);
 
+#ifdef IS_BUILDPORT
+  if (icon->decker)
+    send_to_char(icon->decker->ch, "entering matrix_fight(%s, %s)\r\n", GET_CHAR_NAME(icon->decker->ch), targ->name);
+#endif
+
+  // Determine attack TNs
   switch (matrix[icon->in_host].color)
   {
   case HOST_COLOR_BLUE:
@@ -663,13 +811,20 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
   target -= icon->position;
   targ->parry = 0;
   icon->position = 0;
+
+  // Determine skill dice, damage level, and power
   if (icon->decker)
   {
     for (soft = icon->decker->software; soft; soft = soft->next_content)
       if (GET_OBJ_VAL(soft, 0) == SOFT_ATTACK)
         break;
-    if (!soft)
+    if (!soft) {
+#ifdef IS_BUILDPORT
+  if (icon->decker)
+    send_to_icon(icon, "matrix_fight(): failed to find attack soft, bailing out\r\n");
+#endif
       return;
+    }
     skill = GET_OBJ_VAL(soft, 1) + MIN(GET_MAX_HACKING(icon->decker->ch), GET_REM_HACKING(icon->decker->ch));
     GET_REM_HACKING(icon->decker->ch) -= skill - GET_OBJ_VAL(soft, 1);
     dam = GET_OBJ_VAL(soft, 3);
@@ -686,28 +841,22 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
       skill += targ->decker->scout;
       targ->decker->scout = 0;
     }
-    power = iconrating;
-    if (icon->ic.type == IC_LETHAL_BLACK || icon->ic.type == IC_NON_LETHAL_BLACK) {
-      if (matrix[icon->in_host].color == HOST_COLOR_BLUE || matrix[icon->in_host].color == HOST_COLOR_GREEN)
-        dam = MODERATE;
-      else if (matrix[icon->in_host].color >= HOST_COLOR_ORANGE) {
-        if (matrix[icon->in_host].color == HOST_COLOR_BLACK)
-          power += 2;
-        dam = SERIOUS;
-      }
-    } else {
-      dam = MIN(matrix[icon->in_host].color + 1, DEADLY);
-      if (matrix[icon->in_host].color == HOST_COLOR_BLACK)
-        power += 2;
-    }
+    power = iconrating + (matrix[icon->in_host].color == HOST_COLOR_BLACK ? 2 : 0);
+    dam = ic_dmg_by_color[matrix[icon->in_host].color];
   }
+
+  // Rules for specific IC/decker combinations
   if (targ->decker)
   {
+    // Crippler/ripper IC vs decker
     if (ICON_IS_IC(icon) && (icon->ic.type == IC_CRIPPLER || icon->ic.type == IC_RIPPER)) {
       if (!targ->decker->deck)
         return;
       extern const char *crippler[4];
-      send_to_icon(targ, "%s^n takes a shot at your %s^n program!\r\n", CAP(icon->name), crippler[icon->ic.subtype]);
+      if (targ->type == ICON_LIVING_PERSONA) 
+        send_to_icon(targ, "%s^n takes a shot at your living persona's %s^n attribute!\r\n", CAP(icon->name), crippler[icon->ic.subtype]);
+      else
+        send_to_icon(targ, "%s^n takes a shot at your %s^n program!\r\n", CAP(icon->name), crippler[icon->ic.subtype]);
       switch (icon->ic.subtype) {
       case 0:
         bod = targ->decker->bod;
@@ -723,25 +872,43 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
         break;
       }
       success = success_test(matrix[targ->in_host].security, bod);
+      if (try_execute_shield_program(icon, targ, success) && success <= 0) {
+        return;
+      }
       int resist = success_test(bod + MIN(GET_MAX_HACKING(targ->decker->ch), GET_REM_HACKING(targ->decker->ch)), iconrating);
       GET_REM_HACKING(targ->decker->ch) = MAX(0, GET_REM_HACKING(targ->decker->ch) - GET_MAX_HACKING(targ->decker->ch));
       success -= resist;
-      if (success >= 2) {
+
+      // Results of crippler/ripper IC vs decker
+      if (targ->type == ICON_LIVING_PERSONA) {
+        if (success <= 0) {
+          return send_to_icon(targ, "It fails to damage your living persona.\r\n");
+        }
+        // Houserule: handle like Killer IC instead of Bioware Stress
+        // Hacking pool was already used to resist with the targeted attribute, so only bod here
+        success -= success_test(targ->decker->bod, power);
+        if (icondam <= 0) {
+          return send_to_icon(targ, "You power through it and nullify the damage.\r\n");
+        } else {
+          icondam = convert_damage(stage(success, dam));
+          send_to_icon(targ, "It tears into your living persona!\r\n");
+          if (do_damage_persona(targ, icondam))
+            return;
+        }
+        return;
+      } else if (success >= 2) {
         send_to_icon(targ, "It tears into the program!\r\n");
-        while (success >= 2) {
-          success -= 2;
-          bod--;
+        bod -= success / 2;
+        if (icon->ic.type == IC_CRIPPLER) {
+          bod = MAX(bod, 1);
+        } else if (bod <= 0) {
+          bod = 0;
+          success = success_test(iconrating, targ->decker->mpcp + targ->decker->hardening);
+          fry_mpcp(icon, targ, success);
         }
       } else {
-        send_to_icon(targ, "It fails to cause any damage.\r\n");
+        send_to_icon(targ, "It failed to cause any damage.\r\n");
         return;
-      }
-      if (icon->ic.type == IC_CRIPPLER) {
-        bod = MAX(bod, 1);
-      } else if (bod <= 0) {
-        bod = 0;
-        success = success_test(iconrating, targ->decker->mpcp + targ->decker->hardening);
-        fry_mpcp(icon, targ, success);
       }
       // Damage was done to the attribute, so reduce the attribute
       switch (icon->ic.subtype) {
@@ -763,11 +930,11 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
       return;
     }
 
-    // Not a crippler/ripper, so do a normal attack
+    // Non-crippler/ripper IC vs decker
     send_to_icon(targ, "%s^n runs an attack program against you.\r\n", CAP(icon->name));
     if (icon->ic.type >= IC_LETHAL_BLACK)
       power -= targ->decker->hardening;
-    else
+    else 
       for (soft = targ->decker->software; soft; soft = soft->next_content)
         if (GET_OBJ_VAL(soft, 0) == SOFT_ARMOR) {
           power -= GET_OBJ_VAL(soft, 1);
@@ -777,8 +944,14 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
     GET_REM_HACKING(targ->decker->ch) = MAX(0, GET_REM_HACKING(targ->decker->ch) - GET_MAX_HACKING(targ->decker->ch));
     if (!targ->decker->ras)
       power += 4;
+
+    if (icon->ic.type == IC_TRACE)
+      target += targ->decker->redirect;
+
+    // NOTE: results are below (look for "Attack results" comment)
+
   } else
-  {
+  { // Decker vs IC
     bod = matrix[targ->in_host].security;
     if (targ->ic.options.IsSet(IC_EX_DEFENSE))
       bod += targ->ic.expert;
@@ -793,8 +966,8 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
     if (!icon->decker->ras)
       target += 4;
   }
-  if (ICON_IS_IC(icon) && icon->ic.type == IC_TRACE)
-    target += targ->decker->redirect;
+
+  // Attack!
   success = success_test(skill, target);
   if (success <= 0)
   {
@@ -804,8 +977,17 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
       cascade(icon);
     return;
   }
-  success -= success_test(bod, power);
-  dam = convert_damage(stage(success, dam));
+
+  // Block!
+  if (try_execute_shield_program(icon, targ, success) && success <= 0) {
+#ifdef IS_BUILDPORT
+    if (icon->decker)
+      send_to_icon(icon, "matrix_fight(): shield program failed, bailing out\r\n");
+#endif
+    return;
+  }
+
+  // Results of non-damaging attacks
   if (ICON_IS_IC(icon)) {
     if (icon->ic.type == IC_SCOUT)
     {
@@ -848,9 +1030,12 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
         send_to_icon(targ, "You manage to avoid %s^n's attack.\r\n", decapitalize_a_an(icon->name));
       return;
     }
-  }
-  targ->condition -= dam;
-  switch(dam)
+  } // else { implementations of slow, etc, would go here }
+
+  // Results of damaging attacks
+  success -= success_test(bod, power);
+  icondam = convert_damage(stage(success, dam));
+  switch(icondam)
   {
   case 0:
     send_to_icon(targ, "%s^n's attack reflects off you harmlessly!\r\n", CAP(icon->name));
@@ -875,24 +1060,23 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
     send_to_icon(icon, "You obliterate %s^n.\r\n", decapitalize_a_an(targ->name));
     break;
   }
-  if (dam > 0 && targ->decker)
+  struct char_data *ch = targ->decker ? targ->decker->ch : NULL;
+  if (do_damage_persona(targ, icondam) || (ch && GET_POS(ch) <= POS_STUNNED)) {
+    // If do_damage_persona returns true then the icon condition monitor is overloaded,
+    // or it's an otaku that has fainted/died from brain bleeding.
+    // ~~If it's the latter we check if they're uncon/dead, and then return early.~~
+    // We can't tell which, and damage() returning true means the character was extracted, so we assume the targ has been extracted and bail.
+    return;
+  }
+
+  if (icondam > 0 && ch)
   {
+    // Black IC deal damage to the decker as well as their icon
     if (ICON_IS_IC(icon) && icon->ic.type >= IC_LETHAL_BLACK) {
       int resist = 0;
       bool lethal = icon->ic.type == IC_LETHAL_BLACK ? TRUE : FALSE;
       if (!targ->decker->asist[0] && lethal)
         lethal = FALSE;
-      switch (matrix[icon->in_host].color) {
-      case 0:
-      case 1:
-        dam = MODERATE;
-        break;
-      case 2:
-      case 3:
-      case 4:
-        dam = SERIOUS;
-        break;
-      }
       if (lethal)
         resist = GET_BOD(targ->decker->ch);
       else
@@ -901,11 +1085,10 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
       int wil_test_result = success_test(GET_WIL(targ->decker->ch), power);
       int bod_test_result = success_test(GET_BOD(targ->decker->ch), power);
       success -= targ->decker->iccm ? MAX(wil_test_result, bod_test_result) : success_test(resist, power);
-      dam = convert_damage(stage(success, dam));
+      int meatdam = convert_damage(stage(success, dam));
       send_to_icon(targ, "You smell something burning.\r\n");
 
-      struct char_data *ch = targ->decker->ch;
-      if (damage(targ->decker->ch, targ->decker->ch, dam, TYPE_BLACKIC, lethal ? PHYSICAL : MENTAL)) {
+      if (damage(targ->decker->ch, targ->decker->ch, meatdam, TYPE_BLACKIC, lethal ? PHYSICAL : MENTAL)) {
         // Oh shit, they died. Guess they don't take MPCP damage, since their struct is zeroed out now.
         return;
       }
@@ -927,6 +1110,7 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
         }
       }
     } else {
+      // Simsense overload, SR3 pg 226
       switch(dam) {
       case 1:
         power = 2;
@@ -946,6 +1130,8 @@ void matrix_fight(struct matrix_icon *icon, struct matrix_icon *targ)
       }
     }
   }
+
+  // Process icon destruction
   if (targ->condition < 1)
   {
     if (targ->decker) {
@@ -1099,7 +1285,7 @@ void gain_matrix_karma(struct matrix_icon *icon, struct matrix_icon *targ) {
   ic_stats_total = MAX(MIN(max_exp_gain, ic_stats_total), 1);
 
   // Suppress rewards for unlinked zones.
-  if (vnum_from_non_connected_zone(targ->vnum)) {
+  if (vnum_from_non_approved_zone(targ->vnum) && !IS_SENATOR(icon->decker->ch)) {
 #ifndef IS_BUILDPORT
     mudlog_vfprintf(icon->decker->ch, LOG_SYSLOG, "BUILD ERROR: %s encountered IC '%s' (%ld) from a non-connected zone!",
                     GET_CHAR_NAME(icon->decker->ch),
@@ -1118,7 +1304,10 @@ void gain_matrix_karma(struct matrix_icon *icon, struct matrix_icon *targ) {
 }
 
 const char *get_plaintext_matrix_score_health(struct char_data *ch) {
-  snprintf(buf2, sizeof(buf2), "Persona Condition: %d\r\n", PERSONA->condition);
+  if (ch->persona->type == ICON_LIVING_PERSONA)
+    snprintf(buf2, sizeof(buf2), "Your Mental Condition: %d / %d\r\n", (int)(GET_MENTAL(ch) / 100), (int)(GET_MAX_MENTAL(ch) / 100));
+  else
+    snprintf(buf2, sizeof(buf2), "Persona Condition: %d\r\n", PERSONA_CONDITION);
   snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), "Your Physical Condition: %d / %d\r\n", (int)(GET_PHYSICAL(ch) / 100), (int)(GET_MAX_PHYSICAL(ch) / 100));
   return buf2;
 }
@@ -1129,6 +1318,25 @@ const char *get_plaintext_matrix_score_stats(struct char_data *ch, int detect) {
   snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), "Max %d hacking dice usable per action.\r\n", GET_MAX_HACKING(ch));
   snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), "Persona Programs:\r\nBod: %d\r\nEvasion: %d\r\nMasking: %d\r\nSensors: %d\r\n",
           DECKER->bod, DECKER->evasion, DECKER->masking, DECKER->sensor);
+  if (ch->persona->type == ICON_LIVING_PERSONA) {
+    snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "Your Submersion Echoes: ");
+    int echoes_found = 0;
+    for (int ci=ECHO_UNDEFINED + 1; ci <= ECHO_MAX;ci++) {
+      if (!GET_ECHO(ch, ci)) continue;
+      echoes_found++;
+      if (echoes[ci].incremental)
+        snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%s%s (%d)",
+          echoes_found > 0 ? ", " : "",
+          echoes[ci].name,
+          GET_ECHO(ch, ci));
+      else
+        snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%s%s",
+          echoes_found > 0 ? ", " : "",
+          echoes[ci].name);
+    }
+    if (echoes_found > 0) snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "\r\n");
+    else snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), " None\r\n");
+  }
   return buf2;
 }
 
@@ -1139,6 +1347,13 @@ const char *get_plaintext_matrix_score_deck(struct char_data *ch) {
 }
 
 const char *get_plaintext_matrix_score_memory(struct char_data *ch) {
+  if (DECKER->proxy_deck) {
+    snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), "%s Storage Memory: %d free of %d total\r\n",
+          GET_OBJ_NAME(DECKER->proxy_deck),
+          GET_CYBERDECK_FREE_STORAGE(DECKER->proxy_deck), GET_CYBERDECK_TOTAL_STORAGE(DECKER->proxy_deck));
+  }
+  if (ch->persona->type == ICON_LIVING_PERSONA) return buf2;
+
   snprintf(buf2, sizeof(buf2), "Active Memory: %d free of %d total\r\n", DECKER->active, GET_CYBERDECK_ACTIVE_MEMORY(DECKER->deck));
   snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), "Storage Memory: %d free of %d total\r\n",
           GET_CYBERDECK_FREE_STORAGE(DECKER->deck), GET_CYBERDECK_TOTAL_STORAGE(DECKER->deck));
@@ -1153,12 +1368,7 @@ ACMD(do_matrix_score)
   }
 
   // Calculate detection TN (for others to notice this decker).
-  int detect = 0;
-  for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content)
-    if (GET_OBJ_VAL(soft, 0) == SOFT_SLEAZE)
-      detect = GET_OBJ_VAL(soft, 1);
-  detect += DECKER->masking + 1; // +1 because we round up
-  detect /= 2;
+  int detect = get_detection_factor(ch);
 
   if (*argument) {
     skip_spaces(&argument);
@@ -1193,7 +1403,10 @@ ACMD(do_matrix_score)
     return;
   }
 
-  snprintf(buf, sizeof(buf), "You are connected to the matrix.\r\n");
+  if (ch->persona->type == ICON_LIVING_PERSONA)
+    snprintf(buf, sizeof(buf), "You are communing directly with the matrix using your living persona.\r\n");
+  else
+    snprintf(buf, sizeof(buf), "You are connected to the matrix with %s.\r\n", GET_OBJ_NAME(DECKER->deck));
 
   if (PRF_FLAGGED(ch, PRF_SCREENREADER)) {
     strlcat(buf, get_plaintext_matrix_score_health(ch), sizeof(buf));
@@ -1201,21 +1414,65 @@ ACMD(do_matrix_score)
     strlcat(buf, get_plaintext_matrix_score_deck(ch), sizeof(buf));
     strlcat(buf, get_plaintext_matrix_score_memory(ch), sizeof(buf));
   } else {
+    if (ch->persona->type == ICON_LIVING_PERSONA) {
+      snprintf(ENDOF(buf), sizeof(buf) - strlen(buf),
+              "     Mental:^B%3d(%2d)^n       Physical:^R%3d(%2d)^n\r\n",
+              (int)(GET_MENTAL(ch) / 100), (int)(GET_MAX_MENTAL(ch) / 100), 
+              (int)(GET_PHYSICAL(ch) / 100), (int)(GET_MAX_PHYSICAL(ch) / 100));
+    } else {
+      snprintf(ENDOF(buf), sizeof(buf) - strlen(buf),
+              "  Condition:^B%3d^n           Physical:^R%3d(%2d)^n\r\n",
+              PERSONA_CONDITION, (int)(GET_PHYSICAL(ch) / 100), (int)(GET_MAX_PHYSICAL(ch) / 100));
+    }
     snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), 
-            "  Condition:^B%3d^n           Physical:^R%3d(%2d)^n\r\n"
-            "  Detection:^r%3d^n       Hacking Pool:^g%3d/%3d (%2d)^n\r\n"
-            "    Storage:^g%4d^n/%4d (^c%d^n MP free)\r\n"
+            "  Detection:^r%3d^n       Hacking Pool:^g%3d/%3d (%2d)^n\r\n",
+            detect, MAX(0, GET_REM_HACKING(ch)), GET_HACKING(ch), GET_MAX_HACKING(ch));
+    if (ch->persona->type != ICON_LIVING_PERSONA) {
+      snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), 
+            "    Storage:^g%4d^n/%4d (^c%d^n MP free)\r\n",
+            GET_CYBERDECK_USED_STORAGE(DECKER->deck), GET_CYBERDECK_TOTAL_STORAGE(DECKER->deck), GET_CYBERDECK_FREE_STORAGE(DECKER->deck));
+    }
+    snprintf(ENDOF(buf), sizeof(buf) - strlen(buf),
             "            ^cPersona Programs:^n\r\n"
             "        Bod:^B%3d^n       Evasion:^B%3d^n\r\n"
             "    Masking:^B%3d^n       Sensors:^B%3d^n\r\n"
             "               ^cDeck Status:^n\r\n"
             "  Hardening:^g%3d^n       MPCP:^g%3d^n\r\n"
             "   IO Speed:^g%4d^n      Response Increase:^g%3d^n\r\n",
-            PERSONA->condition, (int)(GET_PHYSICAL(ch) / 100), (int)(GET_MAX_PHYSICAL(ch) / 100),
-            detect, MAX(0, GET_REM_HACKING(ch)), GET_HACKING(ch), GET_MAX_HACKING(ch),
-            GET_CYBERDECK_USED_STORAGE(DECKER->deck), GET_CYBERDECK_TOTAL_STORAGE(DECKER->deck), GET_CYBERDECK_FREE_STORAGE(DECKER->deck),
             DECKER->bod, DECKER->evasion, DECKER->masking, DECKER->sensor,
             DECKER->hardening, DECKER->mpcp, DECKER->deck ? GET_CYBERDECK_IO_RATING(DECKER->deck) : 0, DECKER->response);
+  }
+
+  if (HAS_HITCHER_JACK(DECKER->deck)) {
+    snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "    Hitcher: %s\r\n", DECKER->hitcher ? "^gconnected^n" : "^rdisconnected^n");
+  }
+
+  if (ch->persona->type == ICON_LIVING_PERSONA) {
+    snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "     Echoes: ");
+    int echoes_found = 0;
+    for (int ci=ECHO_UNDEFINED + 1; ci <= ECHO_MAX;ci++) {
+      if (!GET_ECHO(ch, ci)) continue;
+      echoes_found++;
+      if (echoes[ci].incremental)
+        snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%s%s (%d)",
+          echoes_found > 0 ? ", " : "",
+          echoes[ci].name,
+          GET_ECHO(ch, ci));
+      else
+        snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%s%s",
+          echoes_found > 0 ? ", " : "",
+          echoes[ci].name);
+    }
+    if (echoes_found > 0) snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "\r\n");
+    else snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), " None\r\n");
+  }
+
+  if (DECKER->proxy_deck) {
+    snprintf(ENDOF(buf), sizeof(buf) - strlen(buf),
+      "%*s^c%s:^n\r\n"
+      "    Storage:^g%4d^n/%4d (^c%d^n MP free)\r\n"  ,
+      (50 - (int)strlen(GET_OBJ_NAME(DECKER->proxy_deck))) / 2, "", GET_OBJ_NAME(DECKER->proxy_deck),
+      GET_CYBERDECK_USED_STORAGE(DECKER->proxy_deck), GET_CYBERDECK_TOTAL_STORAGE(DECKER->proxy_deck), GET_CYBERDECK_FREE_STORAGE(DECKER->proxy_deck));
   }
 
   if (DECKER->io < GET_CYBERDECK_IO_RATING(DECKER->deck)) {
@@ -1476,11 +1733,6 @@ void show_icon_to_persona(struct matrix_icon *ch, struct matrix_icon *icon) {
 
 ACMD(do_matrix_look)
 {
-  if (!PERSONA) {
-    send_to_char(ch, "You can't do that while hitching.\r\n");
-    return;
-  }
-
   // Did they supply a target? Look at that instead.
   if (argument && *argument) {
     one_argument(argument, arg);
@@ -1791,12 +2043,7 @@ ACMD(do_logoff)
 {
   if (!PERSONA) {
     send_to_char(ch, "You yank the plug out and return to the real world.\r\n");
-    PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
-    for (struct char_data *temp = ch->in_room->people; temp; temp = temp->next_in_room)
-      if (PLR_FLAGGED(temp, PLR_MATRIX)) {
-        send_to_char("Your hitcher has disconnected.\r\n", ch);
-        temp->persona->decker->hitcher = NULL;
-      }
+    clear_hitcher(ch, TRUE);
     return;
   }
   if (subcmd) {
@@ -1829,7 +2076,6 @@ ACMD(do_logoff)
   send_to_host(PERSONA->in_host, buf, PERSONA, FALSE);
 
   // Cleanup of uploads, downloads, etc is handled in icon_from_host, which is called in extract_icon.
-
   extract_icon(PERSONA);
   PERSONA = NULL;
   PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
@@ -1841,11 +2087,104 @@ ACMD(do_logoff)
   }
 }
 
+extern struct obj_data *make_otaku_deck(struct char_data *ch);
+void find_cyberdeck(char_data *ch, obj_data *&cyberdeck, obj_data *&proxy_deck)
+{
+  struct obj_data *cyber = NULL;
+
+  for (cyber = ch->carrying; !cyberdeck && cyber; cyber = cyber->next_content)
+    if ((GET_OBJ_TYPE(cyber) == ITEM_CYBERDECK || GET_OBJ_TYPE(cyber) == ITEM_CUSTOM_DECK) && (IS_SENATOR(ch) || !IS_OBJ_STAT(cyber, ITEM_EXTRA_STAFF_ONLY)))
+      cyberdeck = cyber;
+  for (int i = 0; !cyberdeck && i < NUM_WEARS; i++)
+    if (GET_EQ(ch, i) && (GET_OBJ_TYPE(GET_EQ(ch,i )) == ITEM_CYBERDECK || GET_OBJ_TYPE(GET_EQ(ch,i )) == ITEM_CUSTOM_DECK))
+      cyberdeck = GET_EQ(ch, i);
+
+  if (IS_OTAKU(ch)) {
+    proxy_deck = cyberdeck;
+    cyberdeck = make_otaku_deck(ch);
+  }
+}
+
+/**
+ * @brief Parses the connect command's arguments and modifies the caller's variables
+ *
+ * @param cyberdeck A reference to a pointer to cyberdeck, which could be modified
+ *                   to point to a new object.
+ * @param proxy_deck proxy decks are part of the otaku nonsense
+ * @param host For senators, host allows connecting directly to a host
+ *
+ * @returns whether or not the connect function should return early.
+ */
+bool parse_connect_args(char_data *ch, char *argument, obj_data *&cyberdeck, obj_data *&proxy_deck, rnum_t *host) {
+  struct char_data *temp;
+  vnum_t host_vnum = 0;
+
+  // Easy guard check; is there even an argument?
+  skip_spaces(&argument);
+  if (!*argument) return FALSE;
+
+  char targ[MAX_INPUT_LENGTH];
+  one_argument(argument, targ);
+
+  if (IS_SENATOR(ch)) {
+    host_vnum = atoi(argument);
+  }
+
+  if (!PLR_FLAGGED(ch, PLR_MATRIX) && host_vnum <= 0) {
+    // This is the hitcher code.
+    temp = get_char_room_vis(ch, argument);
+    if (!temp) {
+      send_to_char(ch, "You don't see anyone named '%s' here.\r\n", argument);
+      return TRUE;
+    } else if (temp == ch) {
+      send_to_char(ch, "Are you trying to divide by zero? You can't connect to yourself.\r\n");
+      return TRUE;
+    } else if (
+        !PLR_FLAGGED(temp, PLR_MATRIX)
+        || !temp->persona
+        || !temp->persona->decker
+        || !temp->persona->decker->deck
+        || !HAS_HITCHER_JACK(temp->persona->decker->deck)
+        || IS_IGNORING(temp, is_blocking_ic_interaction_from, ch)) {
+      send_to_char(ch, "It doesn't look like you can hitch a ride with %s.\r\n", argument);
+      return TRUE;
+    } else if (temp->persona->decker->hitcher) {
+      send_to_char(ch, "The hitcher jack on %s's deck is already in use.\r\n", argument);
+      return TRUE;
+    }
+
+    act("You slip your jack into $n's hitcher port.", FALSE, temp, 0, ch, TO_VICT);
+    send_to_char("Someone has connected to your hitcher port.\r\n", temp);
+    PLR_FLAGS(ch).SetBit(PLR_MATRIX);
+    temp->persona->decker->hitcher = ch;
+    ch->hitched_to = temp;
+    return FALSE;
+  }
+
+  if (IS_SENATOR(ch)) {
+    if (host_vnum <= 0) {
+      send_to_char("Invalid syntax! Either CONNECT with no arguments, or CONNECT <vnum> to connect directly to that host.\r\n", ch);
+      return TRUE;
+    }
+
+    rnum_t host_rnum = real_host(host_vnum);
+    if (host_rnum < 0) {
+      send_to_char(ch, "%s is not a valid host.\r\n", argument);
+      return TRUE;
+    }
+
+    send_to_char(ch, "You override your jackpoint to connect to host %ld.\r\n", host_vnum);
+    *host = host_rnum;
+  }
+
+  return FALSE;
+}
+
 ACMD(do_connect)
 {
-  struct char_data *temp;
   struct matrix_icon *icon = NULL;
-  struct obj_data *cyber, *cyberdeck = NULL, *jack;
+  
+  struct obj_data *cyberdeck = NULL, *jack, *proxy_deck = NULL;
   rnum_t host;
 
   if (!ch->in_room || !ch->in_room->matrix || (host = real_host(ch->in_room->matrix)) < 1) {
@@ -1863,39 +2202,18 @@ ACMD(do_connect)
   if (!(jack = get_datajack(ch, FALSE)))
     return;
 
-  for (temp = ch->in_room->people; temp; temp = temp->next_in_room)
-    if (PLR_FLAGGED(temp, PLR_MATRIX) && !IS_IGNORING(temp, is_blocking_ic_interaction_from, ch)) {
-      if (temp->persona && temp->persona->decker->deck) {
-        for (struct obj_data *hitch = temp->persona->decker->deck->contains; hitch; hitch = hitch->next_content) {
-          if (GET_OBJ_TYPE(hitch) == ITEM_DECK_ACCESSORY && GET_OBJ_VAL(hitch, 0) == 1 &&
-              GET_OBJ_VAL(hitch, 1) == 3)
-          {
-            for (struct char_data *temp2 = ch->in_room->people; temp2; temp2 = temp2->next_in_room) {
-              if (temp2 != temp && PLR_FLAGGED(temp2, PLR_MATRIX)) {
-                act("The hitcher jack on $n's deck is already in use.", FALSE, temp, 0, ch, TO_VICT);
-                return;
-              }
-            }
-            act("You slip your jack into $n's hitcher port.", FALSE, temp, 0, ch, TO_VICT);
-            send_to_char("Someone has connected to your hitcher port.\r\n", temp);
-            PLR_FLAGS(ch).SetBit(PLR_MATRIX);
-            temp->persona->decker->hitcher = ch;
-            return;
-          }
-        }
-      }
+  // Locate the appropriate cyberdeck objects for the player.
+  find_cyberdeck(ch, cyberdeck, proxy_deck);
+
+  // Command argument parsing
+  if (parse_connect_args(ch, argument, cyberdeck, proxy_deck, &host))
+      return;
+
 #ifdef JACKPOINTS_ARE_ONE_PERSON_ONLY
       send_to_char("The jackpoint is already in use.\r\n", ch);
       return;
 #endif
-    }
 
-  for (cyber = ch->carrying; !cyberdeck && cyber; cyber = cyber->next_content)
-    if ((GET_OBJ_TYPE(cyber) == ITEM_CYBERDECK || GET_OBJ_TYPE(cyber) == ITEM_CUSTOM_DECK) && (IS_SENATOR(ch) || !IS_OBJ_STAT(cyber, ITEM_EXTRA_STAFF_ONLY)))
-      cyberdeck = cyber;
-  for (int i = 0; !cyberdeck && i < NUM_WEARS; i++)
-    if (GET_EQ(ch, i) && (GET_OBJ_TYPE(GET_EQ(ch,i )) == ITEM_CYBERDECK || GET_OBJ_TYPE(GET_EQ(ch,i )) == ITEM_CUSTOM_DECK))
-      cyberdeck = GET_EQ(ch, i);
   if (!cyberdeck) {
     if (access_level(ch, LVL_ADMIN)) {
       // Create a !RENT staff-only deck from whole cloth.
@@ -1914,28 +2232,6 @@ ACMD(do_connect)
     return;
   }
 
-  if (IS_SENATOR(ch)) {
-    // As staff, you can also connect to specific host vnums from any jackpoint.
-    if (*argument) {
-      skip_spaces(&argument);
-
-      vnum_t host_vnum = atoi(argument);
-      if (host_vnum <= 0) {
-        send_to_char("Invalid syntax! Either CONNECT with no arguments, or CONNECT <vnum> to connect directly to that host.\r\n", ch);
-        return;
-      }
-
-      rnum_t host_rnum = real_host(host_vnum);
-      if (host_rnum < 0) {
-        send_to_char(ch, "%s is not a valid host.\r\n", argument);
-        return;
-      }
-
-      send_to_char(ch, "You override your jackpoint to connect to host %ld.\r\n", host_vnum);
-      host = host_rnum;
-    }
-  }
-
   if (matrix[host].alert > 2) {
     send_to_char("It seems that host has been shut down.\r\n", ch);
     return;
@@ -1943,7 +2239,8 @@ ACMD(do_connect)
 
   if (GET_POS(ch) != POS_SITTING) {
     GET_POS(ch) = POS_SITTING;
-    send_to_char(ch, "You find a place to sit and work with your deck.\r\n");
+    if (cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) send_to_char(ch, "You find a place to sit down and commune with the matrix.\r\n");
+    else send_to_char(ch, "You find a place to sit and work with your deck.\r\n");
   }
 
   icon = Mem->GetIcon();
@@ -1960,6 +2257,10 @@ ACMD(do_connect)
     icon->long_desc = str_dup(ch->player.matrix_text.look_desc);
   else
     icon->long_desc = str_dup("A nondescript persona stands idly here.\r\n");
+  // If this is an Otaku GhostDeck, then this is a living persona
+  if (cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
+    icon->type = ICON_LIVING_PERSONA;
+  }
 
   if (GET_OBJ_TYPE(cyberdeck) == ITEM_CUSTOM_DECK && GET_CYBERDECK_IS_INCOMPLETE(cyberdeck)) {
     send_to_char(ch, "That deck is missing some components.\r\n");
@@ -1973,6 +2274,7 @@ ACMD(do_connect)
       if (GET_OBJ_TYPE(parts) == ITEM_PART && (GET_OBJ_VAL(parts, 0) == PART_ASIST_HOT || GET_OBJ_VAL(parts, 0) == PART_ASIST_COLD))
         break;
     if (!parts) {
+      struct obj_data* cyber = NULL;
       for (cyber = ch->cyberware; cyber; cyber = cyber->next_content)
         if (GET_OBJ_VAL(cyber, 0) == CYB_ASIST)
           break;
@@ -1999,6 +2301,7 @@ ACMD(do_connect)
   DECKER->mxp = real_room(ch->in_room->number) * DECKER->phone->number / MAX(DECKER->phone->rtg, 1);
   PERSONA->idnum = GET_IDNUM(ch);
   DECKER->deck = cyberdeck;
+  DECKER->proxy_deck = proxy_deck;
   DECKER->mpcp = GET_OBJ_VAL(cyberdeck, 0);
   DECKER->hardening = GET_OBJ_VAL(cyberdeck, 1);
   DECKER->active = GET_OBJ_VAL(cyberdeck, 2);
@@ -2025,7 +2328,8 @@ ACMD(do_connect)
   // IO is then divided by 10. I've set it to be a minimum of 1 here.
   DECKER->io = MAX(1, (int)(DECKER->io / 10));
 
-  if (GET_OBJ_VNUM(cyberdeck) != OBJ_CUSTOM_CYBERDECK_SHELL) {
+  if (GET_OBJ_VNUM(cyberdeck) != OBJ_CUSTOM_CYBERDECK_SHELL 
+    && !cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
     DECKER->asist[1] = 0;
     DECKER->asist[0] = 0;
     GET_MAX_HACKING(ch) = 0;
@@ -2051,11 +2355,13 @@ ACMD(do_connect)
         }
       }
       if (GET_OBJ_VAL(soft, 4)) {
-        if (GET_OBJ_VAL(soft, 2) > DECKER->active) {
+        if (GET_OBJ_VAL(soft, 2) > DECKER->active && !soft->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
           send_to_char(ch, "%s^n would exceed your deck's active memory, so it failed to load.\r\n", GET_OBJ_NAME(soft));
           continue;
         }
-        if (GET_OBJ_VAL(soft, 1) > DECKER->mpcp) {
+        // OTAKU living persona don't need to check this, as all programs are complex forms
+        // and we already checked that when we created the deck.
+        if (PERSONA->type != ICON_LIVING_PERSONA && GET_OBJ_VAL(soft, 1) > DECKER->mpcp) {
           send_to_char(ch, "%s^n is too advanced for your deck's MPCP rating, so it failed to load.\r\n", GET_OBJ_NAME(soft));
           continue;
         }
@@ -2074,15 +2380,19 @@ ACMD(do_connect)
       switch (GET_OBJ_VAL(soft, 0)) {
       case PART_BOD:
         DECKER->bod = GET_OBJ_VAL(soft, 1);
+        if (PERSONA->type == ICON_LIVING_PERSONA) DECKER->bod = MIN(DECKER->mpcp*1.5, DECKER->bod + GET_ECHO(ch, ECHO_PERSONA_BOD));
         break;
       case PART_SENSOR:
         DECKER->sensor = GET_OBJ_VAL(soft, 1);
+        if (PERSONA->type == ICON_LIVING_PERSONA) DECKER->sensor = MIN(DECKER->mpcp*1.5, DECKER->sensor + GET_ECHO(ch, ECHO_PERSONA_SENS));
         break;
       case PART_MASKING:
         DECKER->masking = GET_OBJ_VAL(soft, 1);
+        if (PERSONA->type == ICON_LIVING_PERSONA) DECKER->masking = MIN(DECKER->mpcp*1.5, DECKER->masking + GET_ECHO(ch, ECHO_PERSONA_MASK));
         break;
       case PART_EVASION:
         DECKER->evasion = GET_OBJ_VAL(soft, 1);
+        if (PERSONA->type == ICON_LIVING_PERSONA) DECKER->evasion = MIN(DECKER->mpcp*1.5, DECKER->evasion + GET_ECHO(ch, ECHO_PERSONA_EVAS));
         break;
       case PART_ASIST_HOT:
         DECKER->asist[1] = 1;
@@ -2111,7 +2421,7 @@ ACMD(do_connect)
     PERSONA->next = icon_list;
   icon_list = PERSONA;
   icon_to_host(PERSONA, host);
-  if (DECKER->bod + DECKER->sensor + DECKER->evasion + DECKER->masking > DECKER->mpcp * 3) {
+  if (PERSONA->type != ICON_LIVING_PERSONA && (DECKER->bod + DECKER->sensor + DECKER->evasion + DECKER->masking > DECKER->mpcp * 3)) {
     send_to_char(ch, "Your deck overloads on persona programs and crashes. You'll have to keep the combined bod, sensor, evasion, and masking rating less than or equal to %d.\r\n", DECKER->mpcp * 3);
     extract_icon(PERSONA);
     PERSONA = NULL;
@@ -2139,38 +2449,50 @@ ACMD(do_connect)
   if (GET_OBJ_TYPE(jack) == ITEM_CYBERWARE) {
     if (GET_CYBERWARE_TYPE(jack) == CYB_DATAJACK) {
       if (GET_CYBERWARE_FLAGS(jack) == DATA_INDUCTION) {
-        snprintf(buf, sizeof(buf), "$n places $s hand over $s induction pad as $e connects to $s cyberdeck.");
+        snprintf(buf, sizeof(buf), "$n places $s hand over $s induction pad as $e connects to %s.",
+          !proxy_deck && cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE) ? "the jackpoint" : "$s cyberdeck");
       } else {
-        snprintf(buf, sizeof(buf), "$n slides one end of the cable into $s datajack and the other into $s cyberdeck.");
+        snprintf(buf, sizeof(buf), "$n slides one end of the cable into $s datajack and the other into %s.",
+          !proxy_deck && cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE) ? "the jackpoint" : "$s cyberdeck");
       }
     } else {
-      snprintf(buf, sizeof(buf), "$n's eye opens up as $e slides $s cyberdeck cable into $s eye datajack.");
+      snprintf(buf, sizeof(buf), "$n's eye opens up as $e slides %s cable into $s eye datajack.",
+        !proxy_deck && cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE) ? "the jackpoint" : "$s cyberdeck");
     }
   } else {
     snprintf(buf, sizeof(buf), "$n plugs the leads of $s 'trode net into $s cyberdeck.");
   }
   act(buf, FALSE, ch, 0, 0, TO_ROOM);
-  act("You jack into the matrix.", FALSE, ch, 0, 0, TO_CHAR);
+  if (cyberdeck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) 
+    act("You jack into the matrix to commune with the resonance.", FALSE, ch, 0, 0, TO_CHAR);
+  else 
+    send_to_char(ch, "You jack into the matrix with your %s.\r\n", GET_OBJ_NAME(cyberdeck));
   PLR_FLAGS(ch).SetBit(PLR_MATRIX);
   do_matrix_look(ch, NULL, 0, 0);
 }
 
 ACMD(do_load)
 {
-  if (!PERSONA) {
-    send_to_char(ch, "You can't do that while hitching.\r\n");
-    return;
-  }
-  if (!DECKER->deck) {
+  obj_data *deck = DECKER->deck;
+  if (IS_OTAKU(DECKER->ch))
+    deck = DECKER->proxy_deck;
+
+  if (!deck) {
     send_to_char(ch, "You need a deck to %s from!\r\n", subcmd == SCMD_UNLOAD ? "unload" : "upload");
     return;
   }
+
   if (!*argument) {
     send_to_char(ch, "What do you want to %s?\r\n", subcmd == SCMD_UNLOAD ? "unload" : "upload");
     return;
   }
+
   skip_spaces(&argument);
   if (subcmd == SCMD_UNLOAD) {
+    if (PERSONA->type == ICON_LIVING_PERSONA) {
+      send_to_icon(PERSONA, "You don't have active memory to erase things from.\r\n");
+      return;
+    }
     struct obj_data *temp = NULL;
     for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content) {
       if (keyword_appears_in_obj(argument, soft)) {
@@ -2188,7 +2510,8 @@ ACMD(do_load)
     }
   } else {
     // What is with the absolute fascination with non-bracketed if/for/else/etc statements in this codebase? This was enormously hard to read. - LS
-    for (struct obj_data *soft = DECKER->deck->contains; soft; soft = soft->next_content) {
+    // lol, so true - bitMuse
+    for (struct obj_data *soft = deck->contains; soft; soft = soft->next_content) {
       // Look for a name match.
       if (!keyword_appears_in_obj(argument, soft))
         continue;
@@ -2197,7 +2520,8 @@ ACMD(do_load)
         continue;
 
       if (subcmd == SCMD_UPLOAD) {
-        if (GET_OBJ_TYPE(soft) == ITEM_PROGRAM && (GET_PROGRAM_TYPE(soft) <= SOFT_SENSOR || GET_PROGRAM_TYPE(soft) == SOFT_EVALUATE)) {
+        if (GET_OBJ_TYPE(soft) == ITEM_PROGRAM && (GET_PROGRAM_TYPE(soft) <= SOFT_SENSOR || GET_PROGRAM_TYPE(soft) == SOFT_EVALUATE 
+        || soft->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE))) {
           send_to_icon(PERSONA, "You can't upload %s^n.\r\n", GET_OBJ_NAME(soft));
           return;
         }
@@ -2302,11 +2626,14 @@ ACMD(do_download)
     return;
   }
   WAIT_STATE(ch, (int) (DECKING_WAIT_STATE_TIME));
-  struct obj_data *soft = NULL;
+  struct obj_data *soft = NULL, *target_deck = DECKER->deck;
+  
+  // This line lets otaku use proxy decks to download files.
+  if (IS_OTAKU(DECKER->ch) && DECKER->proxy_deck) target_deck = DECKER->proxy_deck;
   skip_spaces(&argument);
   // TODO: This might cause conflicts if multiple deckers have paydata on the host.
   if ((soft = get_obj_in_list_vis(ch, argument, matrix[PERSONA->in_host].file)) && GET_DECK_ACCESSORY_FILE_FOUND_BY(soft) == PERSONA->idnum) {
-    if (GET_CYBERDECK_FREE_STORAGE(DECKER->deck) < GET_DECK_ACCESSORY_FILE_SIZE(soft)) {
+    if (GET_CYBERDECK_FREE_STORAGE(target_deck) < GET_DECK_ACCESSORY_FILE_SIZE(soft)) {
       send_to_icon(PERSONA, "You don't have enough storage memory to download that file.\r\n");
       return;
     } else {
@@ -2333,8 +2660,10 @@ ACMD(do_download)
           if (!dam)
             send_to_icon(PERSONA, "The %s explodes, but fails to cause damage to you.\r\n", GET_OBJ_VAL(soft, 5) == 2 ? "Data Bomb" : "Pavlov");
           else {
-            PERSONA->condition -= dam;
-            if (PERSONA->condition < 1) {
+            if (do_damage_persona(PERSONA, dam) || (ch && GET_POS(ch) <= POS_STUNNED)) {
+              return;
+            }
+            if (PERSONA_CONDITION < 1) {
               send_to_icon(PERSONA, "The %s explodes, ripping your icon into junk logic\r\n", GET_OBJ_VAL(soft, 5) == 2 ? "Data Bomb" : "Pavlov");
               dumpshock(PERSONA);
               return;
@@ -2618,15 +2947,42 @@ ACMD(do_decrypt)
 }
 
 void send_active_program_list(struct char_data *ch) {
+  if (DECKER->deck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
+    // We're an otaku using a living persona; we don't have active memory.
+    for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content) {
+      snprintf(buf, sizeof(buf), "%25s, Complex Form, %s-R^c%d^n", 
+        GET_OBJ_NAME(soft),
+        programs[GET_COMPLEX_FORM_PROGRAM(soft)].name,
+        GET_COMPLEX_FORM_RATING(soft)
+      );
+
+      if (GET_OTAKU_PATH(ch) == OTAKU_PATH_CYBERADEPT) {
+        snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), " (^g%d^n)", GET_COMPLEX_FORM_RATING(soft) + 1);
+      }
+
+      snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "\r\n");
+      send_to_icon(PERSONA, buf);
+    }
+    return;
+  }
   send_to_icon(PERSONA, "Active Memory Total:(^G%d^n) Free:(^R%d^n):\r\n", GET_OBJ_VAL(DECKER->deck, 2), DECKER->active);
   for (struct obj_data *soft = DECKER->software; soft; soft = soft->next_content)
     send_to_icon(PERSONA, "%25s Rating: %2d\r\n", GET_OBJ_NAME(soft), GET_OBJ_VAL(soft, 1));
 }
 
 void send_storage_program_list(struct char_data *ch) {
-  send_to_icon(PERSONA, "\r\nStorage Memory Total:(^G%d^n) Free:(^R%d^n):\r\n", GET_OBJ_VAL(DECKER->deck, 3),
-               GET_OBJ_VAL(DECKER->deck, 3) - GET_OBJ_VAL(DECKER->deck, 5));
-  for (struct obj_data *soft = DECKER->deck->contains; soft; soft = soft->next_content)
+  obj_data *deck = DECKER->deck;
+  if (DECKER->deck->obj_flags.extra_flags.IsSet(ITEM_EXTRA_OTAKU_RESONANCE)) {
+    // We're an otaku using a living persona; we don't have storage memory.
+    if (DECKER->proxy_deck) deck = DECKER->proxy_deck;
+    else {
+      send_to_icon(PERSONA, "\r\nNo Available Storage Memory\r\n");
+      return;
+    }
+  }
+  send_to_icon(PERSONA, "\r\nStorage Memory Total:(^G%d^n) Free:(^R%d^n):\r\n", GET_OBJ_VAL(deck, 3),
+               GET_OBJ_VAL(deck, 3) - GET_OBJ_VAL(deck, 5));
+  for (struct obj_data *soft = deck->contains; soft; soft = soft->next_content)
     if (GET_OBJ_TYPE(soft) == ITEM_PROGRAM && (GET_PROGRAM_TYPE(soft) > SOFT_SENSOR))
       send_to_icon(PERSONA, "%-30s^n Rating: %2d\r\n", GET_OBJ_NAME(soft), GET_OBJ_VAL(soft, 1));
     else if (GET_OBJ_TYPE(soft) == ITEM_DECK_ACCESSORY && GET_OBJ_VAL(soft, 0) == TYPE_FILE)
@@ -2810,7 +3166,13 @@ void process_upload(struct matrix_icon *persona)
 {
   // Note: We only upload one file at a time. Find the first valid one and process it, then stop.
   if (persona && persona->decker && persona->decker->deck) {
-    for (struct obj_data *soft = persona->decker->deck->contains; soft; soft = soft->next_content) {
+    obj_data *deck = persona->decker->deck;
+    if (persona->decker->proxy_deck)
+      deck = persona->decker->proxy_deck;
+
+    for (struct obj_data *soft = deck->contains, *next_obj; soft; soft = next_obj) {
+      next_obj = soft->next_content;
+
       // Sanity check: Only upload deck accessories.
       if (GET_OBJ_TYPE(soft) != ITEM_DECK_ACCESSORY && GET_OBJ_TYPE(soft) != ITEM_PROGRAM)
         continue;
@@ -2862,7 +3224,7 @@ void process_upload(struct matrix_icon *persona)
           // Make it seen by them.
           GET_DECK_ACCESSORY_FILE_FOUND_BY(soft) = GET_IDNUM(persona->decker->ch);
           // Remove it from their deck's used storage.
-          GET_CYBERDECK_USED_STORAGE(persona->decker->deck) -= GET_DECK_ACCESSORY_FILE_SIZE(soft);
+          GET_CYBERDECK_USED_STORAGE(deck) -= GET_DECK_ACCESSORY_FILE_SIZE(soft);
           GET_DECK_ACCESSORY_FILE_IS_UPLOADING_TO_HOST(soft) = 0;
           GET_DECK_ACCESSORY_FILE_REMAINING(soft) = 0;
 
@@ -3059,9 +3421,12 @@ void matrix_update()
           } else {
             GET_DECK_ACCESSORY_FILE_REMAINING(file) -= persona->decker->io;
             // TODO BUG: What if you're out of space? It silently fails to download and just eternally decrements? Might even hit 0 and have 8 still set.
+            struct obj_data *target_deck = persona->decker->deck;
+            // Otaku code for proxy decks; allow downloading to proxy decks
+            if (IS_OTAKU(persona->decker->ch) && persona->decker->proxy_deck) target_deck = persona->decker->proxy_deck;
             if (GET_DECK_ACCESSORY_FILE_REMAINING(file) <= 0) {
               // Out of space? Inform them, reset the file, bail.
-              if (GET_OBJ_VAL(persona->decker->deck, 3) - GET_OBJ_VAL(persona->decker->deck, 5) < GET_DECK_ACCESSORY_FILE_SIZE(file)) {
+              if (GET_OBJ_VAL(target_deck, 3) - GET_OBJ_VAL(target_deck, 5) < GET_DECK_ACCESSORY_FILE_SIZE(file)) {
                 send_to_icon(persona, "%s^n failed to download-- your deck is out of space.\r\n", CAP(GET_OBJ_NAME(file)));
                 GET_DECK_ACCESSORY_FILE_REMAINING(file) = 0;
                 GET_DECK_ACCESSORY_FILE_WORKER_IDNUM(file) = 0;
@@ -3069,9 +3434,9 @@ void matrix_update()
               }
 
               obj_from_host(file);
-              obj_to_obj(file, persona->decker->deck);
+              obj_to_obj(file, target_deck);
               send_to_icon(persona, "%s^n has finished downloading to your deck.\r\n", CAP(GET_OBJ_NAME(file)));
-              GET_OBJ_VAL(persona->decker->deck, 5) += GET_DECK_ACCESSORY_FILE_SIZE(file);
+              GET_OBJ_VAL(target_deck, 5) += GET_DECK_ACCESSORY_FILE_SIZE(file);
               GET_DECK_ACCESSORY_FILE_FOUND_BY(file) = 0;
               GET_DECK_ACCESSORY_FILE_REMAINING(file) = 0;
               GET_DECK_ACCESSORY_FILE_WORKER_IDNUM(file) = 0;
@@ -3536,8 +3901,12 @@ ACMD(do_comcall)
                 send_to_char("You feel your phone ring.\r\n", tch);
             }
           } else {
-            snprintf(buf, sizeof(buf), "%s^n rings.", GET_OBJ_NAME(k->phone));
-            send_to_room(buf, k->phone->in_room);
+              snprintf(buf, sizeof(buf), "%s^n rings.", GET_OBJ_NAME(k->phone));
+            if (k->phone->in_veh) {
+              send_to_veh(buf, k->phone->in_veh, ch, TRUE);
+            } else {
+              send_to_room(buf, k->phone->in_room);
+            }
           }
         }
         send_to_icon(PERSONA, "It begins to ring.\r\n");
@@ -3584,11 +3953,7 @@ ACMD(do_restrict)
   }
 #endif
 
-  for (struct obj_data *soft = targ->decker->software; soft; soft = soft->next_content)
-    if (GET_OBJ_VAL(soft, 0) == SOFT_SLEAZE)
-      detect = GET_OBJ_VAL(soft, 1);
-  detect += targ->decker->masking + 1; // +1 because we round up
-  detect /= 2;
+  detect = get_detection_factor(ch);
 
   if (is_abbrev(buf, "detection")) {
     success = system_test(PERSONA->in_host, ch, ACIFS_CONTROL, SOFT_VALIDATE, detect);
@@ -3722,7 +4087,19 @@ ACMD(do_create)
   }
   argument = any_one_arg(argument, buf1);
 
-  if (is_abbrev(buf1, "program")) {
+  if (is_abbrev(buf1, "complex form"))
+  {
+    if (!IS_OTAKU(ch)) {
+      send_to_char("Everyone knows that otaku aren't real, chummer.\r\n", ch);
+      return;
+    } else if (!GET_SKILL(ch, SKILL_COMPUTER)) {
+      send_to_char("You must learn computer skills to create complex forms.\r\n", ch);
+      return;
+    }
+    create_complex_form(ch);
+  }
+
+  else if (is_abbrev(buf1, "program")) {
     if (!GET_SKILL(ch, SKILL_COMPUTER)) {
       send_to_char("You must learn computer skills to create programs.\r\n", ch);
       return;
@@ -3770,8 +4147,12 @@ ACMD(do_create)
     create_art(ch);
   }
 
+  else if (is_abbrev(buf1, "pets")) {
+    create_pet(ch);
+  }
+
   else {
-    send_to_char("You can only create programs, parts, decks, ammunition, spells, and art.\r\n", ch);
+    send_to_char("You can only create programs, parts, decks, ammunition, spells, complex forms, art, and pets.\r\n", ch);
     return;
   }
 }
@@ -3801,6 +4182,8 @@ ACMD(do_asist)
 {
   if (!PERSONA)
     send_to_char("You can't do that while hitching.\r\n", ch);
+  else if (PERSONA->type == ICON_LIVING_PERSONA)
+    send_to_char("You can't switch ASIST modes while using a living persona.\r\n", ch);
   else if (!DECKER->asist[1])
     send_to_char("You can't switch ASIST modes with a cold ASIST interface.\r\n", ch);
   else if (DECKER->asist[0]) {

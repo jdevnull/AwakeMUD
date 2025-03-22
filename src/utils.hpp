@@ -192,6 +192,8 @@ struct room_data *get_jurisdiction_docwagon_room(int jurisdiction);
 struct room_data *get_jurisdiction_garage_room(int jurisdiction);
 void   set_dropped_by_info(struct obj_data *obj, struct char_data *ch);
 bool   restore_to_full_health_if_still_in_chargen(struct char_data *victim);
+char * format_for_logging__returns_new(const char *input);
+int    calculate_ware_essence_or_index_cost(struct char_data *ch, struct obj_data *ware);
 
 // RCD subscription functions.
 bool   add_veh_to_chs_subscriber_list(struct veh_data *veh, struct char_data *ch, const char *caller, bool ignore_veh_sub_marker, bool mute_duplication_alarm=FALSE);
@@ -293,7 +295,7 @@ void    reverse_obj_list(struct obj_data **obj);
 void    mental_gain(struct char_data *ch);
 void    physical_gain(struct char_data *ch);
 void    advance_level(struct char_data *ch);
-void    set_title(struct char_data *ch, const char *title);
+void    set_title(struct char_data *ch, const char *title, bool save_to_db);
 void    set_pretitle(struct char_data *ch, const char *title);
 void    set_whotitle(struct char_data *ch, const char *title);
 int     gain_karma(struct char_data * ch, int gain, bool rep, bool limits, bool multiplier);
@@ -349,12 +351,13 @@ bool    update_pos(struct char_data *victim, bool protect_spells_from_purge=0);
 
 #define AN(string) (strchr("aeiouAEIOU", *string) ? "an" : "a")
 
-
+/*
 #define CREATE(result, type, number)  do {\
  if ((number) * sizeof(type) <= 0) \
   log_vfprintf("SYSERR: Zero bytes or less requested at %s:%d.", __FILE__, __LINE__); \
  if (!((result) = (type *) calloc ((number), sizeof(type)))) \
   { perror("SYSERR: malloc failure"); exit(ERROR_MALLOC_FAILED_IN_CREATE_MACRO); } } while(0)
+*/
 
 /*
  * the source previously used the same code in many places to remove an item
@@ -425,6 +428,8 @@ bool    update_pos(struct char_data *victim, bool protect_spells_from_purge=0);
 
 #define IS_PRESTIGE_RACE(race) (RACE_IS_DRAGON(race) || RACE_IS_DRAKE(race) || RACE_IS_GHOUL(race) || race == RACE_DRYAD)
 #define IS_PRESTIGE_CH(ch) (IS_PRESTIGE_RACE(GET_RACE(ch)))
+
+#define IS_OTAKU(ch) (GET_OTAKU_PATH(ch) > 0)
 
 #define GET_RACIAL_STARTING_ESSENCE_FOR_RACE(race)  (RACE_IS_GHOUL(race) ? 500 : (RACE_IS_DRAGON(race) ? 700 : 600))
 
@@ -544,12 +549,13 @@ extern bool PLR_TOG_CHK(char_data *ch, dword offset);
 #define GET_DESC_LEVEL(d)  ((d)->original ? GET_LEVEL((d)->original) : ((d)->character ? GET_LEVEL((d)->character) : 0))
 
 #define GET_RACE(ch)          ((ch)->player.race)
-#define GET_TRADITION(ch)       ((ch)->player.tradition)
-#define GET_ASPECT(ch)    ((ch)->player.aspect)
-#define GET_LASTROOM(ch)          ((ch)->player.last_room)
+#define GET_OTAKU_PATH(ch)    ((ch)->player.otaku_path)
+#define GET_TRADITION(ch)     ((ch)->player.tradition)
+#define GET_ASPECT(ch)        ((ch)->player.aspect)
+#define GET_LASTROOM(ch)      ((ch)->player.last_room)
 #define GET_HEIGHT(ch)        ((ch)->player.height)
 #define GET_WEIGHT(ch)        ((ch)->player.weight)
-#define GET_PRONOUNS(ch)           ((ch)->player.pronouns)
+#define GET_PRONOUNS(ch)      ((ch)->player.pronouns)
 
 #define GET_ATT(ch, i)        ((ch)->aff_abils.attributes[(i)])
 #define GET_REAL_ATT(ch, i)   ((ch)->real_abils.attributes[(i)])
@@ -652,13 +658,12 @@ int get_armor_penalty_grade(struct char_data *ch);
 #define GET_COND(ch, i)         ((ch)->player_specials->saved.conditions[(i)])
 #define GET_LOADROOM(ch)        ((ch)->player_specials->saved.load_room)
 #define GET_LAST_IN(ch)         ((ch)->player_specials->saved.last_in)
-#define GET_PRACTICES(ch)       ((ch)->player_specials->saved.spells_to_learn)
 #define GET_INVIS_LEV(ch)       ((ch)->player_specials->saved.invis_level)
 #define GET_INCOG_LEV(ch)       ((ch)->player_specials->saved.incog_level)
 #define GET_WIMP_LEV(ch)        ((ch)->player_specials->saved.wimp_level)
 #define GET_FREEZE_LEV(ch)      ((ch)->player_specials->saved.freeze_level)
 #define GET_BAD_PWS(ch)         ((ch)->player_specials->saved.bad_pws)
-#define GET_SYSTEM_POINTS(ch)   ((ch)->player_specials->saved.system_points)
+#define GET_SYSTEM_POINTS(ch)   ((ch && ch->desc && ch->desc->original) ? ch->desc->original->player_specials->saved.system_points : ch->player_specials->saved.system_points)
 #define GET_WATCH(ch)           ((ch)->player_specials->watching)
 #define GET_ASTRAL(ch)          ((ch)->aff_abils.astral_pool)
 #define GET_DODGE(ch)           ((ch)->aff_abils.defense_pool)
@@ -680,6 +685,7 @@ int get_armor_penalty_grade(struct char_data *ch);
 #define GET_DOMAIN(ch)          ((ch)->points.domain)
 #define GET_ATT_POINTS(ch)      ((ch)->player_specials->saved.att_points)
 #define GET_SKILL_POINTS(ch)    ((ch)->player_specials->saved.skill_points)
+#define GET_CHANNEL_POINTS(ch)  ((ch)->player_specials->saved.channel_points)
 #define GET_FORCE_POINTS(ch)    ((ch)->player_specials->saved.force_points)
 #define GET_RESTRING_POINTS(ch) ((ch)->player_specials->saved.restring_points)
 #define GET_ARCHETYPAL_TYPE(ch) ((ch)->player_specials->saved.archetype)
@@ -736,6 +742,9 @@ int get_armor_penalty_grade(struct char_data *ch);
 #define GET_METAMAGIC(ch, i)    ((ch)->char_specials.saved.metamagic[i] != 0 ? (ch)->char_specials.saved.metamagic[i] : 0)
 #define SET_METAMAGIC(ch, i, amt)    {(ch)->char_specials.saved.metamagic[i] = amt; GET_METAMAGIC_DIRTY_BIT(ch) = TRUE;}
 
+#define GET_ECHO(ch, i)         ((ch)->char_specials.saved.echoes[i] != 0 ? (ch)->char_specials.saved.echoes[i] : 0)
+#define SET_ECHO(ch, i, amt)    {(ch)->char_specials.saved.echoes[i] = amt; GET_ECHOES_DIRTY_BIT(ch) = TRUE;} 
+
 #define GET_MASKING(ch)    ((ch)->char_specials.saved.masking)
 #define GET_CENTERINGSKILL(ch)  ((ch)->char_specials.saved.centeringskill)
 #define GET_PP(ch)    ((ch)->char_specials.saved.powerpoints)
@@ -743,12 +752,19 @@ int get_armor_penalty_grade(struct char_data *ch);
 #define GET_EQ(ch, i)         ((ch)->equipment[i])
 
 #define SKILL_IS_LANGUAGE(skill) (((skill) >= SKILL_ENGLISH && (skill) <= SKILL_FRENCH) || ((skill) >= SKILL_HEBREW && (skill) <= SKILL_IROQUOIS) || ((skill) == SKILL_MANDARIN || (skill) == SKILL_HAITIAN_CREOLE))
+#define SKILL_IS_DECKING(skill) ((skill) == SKILL_CYBERTERM_DESIGN || (skill) == SKILL_COMPUTER || (skill) == SKILL_BR_COMPUTER || (skill) == SKILL_BR_ELECTRONICS || ((skill) >= SKILL_PROGRAM_COMBAT && (skill) <= SKILL_PROGRAM_CYBERTERM) || (skill) == SKILL_DATA_BROKERAGE)
+#define SKILL_IS_MAGICAL(skill) ((skill) == SKILL_SPELLDESIGN || (skills[skill].requires_magic && !(skills[skill].is_nerps)))
+#define SKILL_IS_VEHICLE_RELATED(skill) ((skill) == SKILL_PILOT_BIKE || ((skill) >= SKILL_PILOT_CAR && (skill) <= SKILL_BR_TRUCK) || ((skill) >= SKILL_PILOT_ROTORCRAFT && (skill) <= SKILL_PILOT_VECTORTHRUST) || ((skill) >= SKILL_BR_FIXEDWING && (skill) <= SKILL_PILOT_WALKER))
+#define SKILL_IS_NERPS(skill) (skills[skill].is_nerps)
+#define SKILL_IS_SOCIAL(skill) ((skill) == SKILL_NEGOTIATION || ((skill) >= SKILL_CORPORATE_ETIQUETTE && (skill) <= SKILL_ELF_ETIQUETTE))
+#define SKILL_IS_COMBAT(skill) (!skills[skill].is_nerps && (((skill) != SKILL_CENTERING && (skill) != SKILL_SPELLDESIGN && (skill) >= SKILL_ARMED_COMBAT && (skill) <= SKILL_ORALSTRIKE) || ((skill) >= SKILL_OFFHAND_EDGED && (skill) <= SKILL_OFFHAND_WHIP) || (skill) == SKILL_GUNNERY))
 
 #define GET_SKILL_DIRTY_BIT(ch)         ((ch)->char_specials.dirty_bits[DIRTY_BIT_SKILLS])
 #define GET_ADEPT_POWER_DIRTY_BIT(ch)   ((ch)->char_specials.dirty_bits[DIRTY_BIT_POWERS])
 #define GET_SPELLS_DIRTY_BIT(ch)        ((ch)->char_specials.dirty_bits[DIRTY_BIT_SPELLS])
 #define GET_METAMAGIC_DIRTY_BIT(ch)     ((ch)->char_specials.dirty_bits[DIRTY_BIT_METAMAGIC])
 #define GET_ELEMENTALS_DIRTY_BIT(ch)    ((ch)->char_specials.dirty_bits[DIRTY_BIT_ELEMENTALS])
+#define GET_ECHOES_DIRTY_BIT(ch)        ((ch)->char_specials.dirty_bits[DIRTY_BIT_ECHOES])
 #define GET_MEMORY_DIRTY_BIT(ch)        ((ch)->char_specials.dirty_bits[DIRTY_BIT_MEMORY])
 #define GET_ALIAS_DIRTY_BIT(ch)         ((ch)->char_specials.dirty_bits[DIRTY_BIT_ALIAS])
 
@@ -802,8 +818,8 @@ bool _mob_is_alert(struct char_data *npc);
                                GET_BUILDING((ch)) = NULL;}
 #define STOP_DRIVING(ch)      {AFF_FLAGS((ch)).RemoveBits(AFF_PILOT, AFF_RIG, ENDBIT);}
 
-#define GET_TOTEM(ch)                              (ch->player_specials->saved.totem)
-#define GET_TOTEMSPIRIT(ch)                        (ch->player_specials->saved.totemspirit)
+#define GET_TOTEM(ch)                              ((ch && ch->desc && ch->desc->original) ? ch->desc->original->player_specials->saved.totem : ch->player_specials->saved.totem)
+#define GET_TOTEMSPIRIT(ch)                        ((ch && ch->desc && ch->desc->original) ? ch->desc->original->player_specials->saved.totemspirit : ch->player_specials->saved.totemspirit)
 
 #define GET_MENTAL_LOSS(ch)                        (ch->player_specials->mental_loss)
 #define GET_PHYSICAL_LOSS(ch)                      (ch->player_specials->physical_loss)
@@ -1230,7 +1246,8 @@ bool is_weapon_focus_usable_by(struct obj_data *focus, struct char_data *ch);
 #define GET_CYBERWARE_FLAGS(cyberware)            (GET_OBJ_VAL((cyberware), 3)) // CYBERWEAPON_RETRACTABLE, CYBERWEAPON_IMPROVED
 #define GET_CYBERWARE_LACING_TYPE(cyberware)      (GET_OBJ_VAL((cyberware), 3)) // Yes, this is also value 3. Great design here.
 #define GET_CYBERWARE_MEMORY_MAX(cyberware)       (GET_OBJ_VAL((cyberware), 3))
-#define GET_CYBERWARE_ESSENCE_COST(cyberware)     (GET_OBJ_VAL((cyberware), 4))
+#define GET_CYBERWARE_SETTABLE_ESSENCE_COST(cyberware)     (GET_OBJ_VAL((cyberware), 4))
+#define GET_CYBERWARE_ESSENCE_COST_RO(cyberware)     (1 ? GET_OBJ_VAL((cyberware), 4) : 0)
 #define GET_CYBERWARE_RADIO_MAX_CRYPT(cyberware)  (GET_OBJ_VAL((cyberware), 5))
 #define GET_CYBERWARE_MEMORY_USED(cyberware)      (GET_OBJ_VAL((cyberware), 5))
 #define GET_CYBERWARE_RADIO_FREQ(cyberware)       (GET_OBJ_VAL((cyberware), 6)) // Settable by player
@@ -1387,6 +1404,17 @@ bool is_weapon_focus_usable_by(struct obj_data *focus, struct char_data *ch);
 #define GET_DESIGN_CREATOR_IDNUM(prog)                      (GET_OBJ_VAL((prog), 9))
 #define GET_DESIGN_COMPLETED(prog)                          (GET_OBJ_VAL((prog), 10))
 #define GET_DESIGN_ORIGINAL_TICKS_LEFT(prog)                (GET_OBJ_TIMER((prog)))
+
+// ITEM_COMPLEX_FORM convenience defines
+#define GET_COMPLEX_FORM_PROGRAM(prog)                      (GET_OBJ_VAL((prog), 0))
+#define GET_COMPLEX_FORM_RATING(prog)                       (GET_OBJ_VAL((prog), 1))
+#define GET_COMPLEX_FORM_WOUND_LEVEL(prog)                  (GET_OBJ_VAL((prog), 2))
+#define GET_COMPLEX_FORM_KARMA_PAID(prog)                   (GET_OBJ_VAL((prog), 3))
+#define GET_COMPLEX_FORM_LEARNING_TICKS_LEFT(prog)          (GET_OBJ_VAL((prog), 4))
+#define GET_COMPLEX_FORM_ORIGINAL_TICKS_LEFT(prog)          (GET_OBJ_VAL((prog), 5)) /* Using this instead of timer because timer isn't persisted */
+#define GET_COMPLEX_FORM_SIZE(prog)                         (GET_OBJ_VAL((prog), 6))
+#define GET_COMPLEX_FORM_LEARNING_FAILED(prog)              (GET_OBJ_VAL((prog), 7))
+#define GET_COMPLEX_FORM_CREATOR_IDNUM(prog)                (GET_OBJ_VAL((prog), 9))
 
 // ITEM_GUN_AMMO convenience defines
 #define GET_AMMOBOX_QUANTITY(box)                           (GET_OBJ_VAL((box), 0))
@@ -1598,6 +1626,15 @@ char    *crypt(const char *key, const char *salt);
 
 #define CHARS_IN_SAME_LOCATION(first, second) ((first)->in_room ? (first)->in_room == (second)->in_room : (first)->in_veh == (second)->in_veh)
 
+/**
+ * Calculates the attribute maximum for <ch>.
+ * 
+ * @param ch The char_data to check 
+ * @param attr The numeric identifier for the type of attribute to check
+ * @return The integer maximum that character's <attr> can be.
+ */
+int get_attr_max(struct char_data *ch, int attr);
+
 // Nuyen tracking functions.
 void gain_nuyen(struct char_data *ch, long amount, int category);
 void lose_nuyen(struct char_data *ch, long amount, int category);
@@ -1627,6 +1664,9 @@ struct obj_data *get_datajack(struct char_data *ch, bool is_rigging);
 #define ENSURE_OBJ_HAS_IDNUM(obj) if (!GET_OBJ_IDNUM(obj)) { RANDOMLY_GENERATE_OBJ_IDNUM(obj) }
 
 #define SB_CODE_OBJ_CANT_BE_SOULBOUND -2
+
+// IN APARTMENTS AND VEHICLES, we don't save things that are !RENT, or are non-restrung food or drink.
+#define OBJ_SHOULD_NOT_SAVE_IN_APTS_AND_VEHS(obj)  (IS_OBJ_STAT((obj), ITEM_EXTRA_NORENT) || (!(obj)->restring && (GET_OBJ_TYPE((obj)) == ITEM_FOOD || GET_OBJ_TYPE((obj)) == ITEM_DRINKCON)))
 
 #ifdef ENABLE_THIS_IF_YOU_WANT_TO_HATE_YOUR_LIFE
 extern void verify_every_pointer_we_can_think_of();

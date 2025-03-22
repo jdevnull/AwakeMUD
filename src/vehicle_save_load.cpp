@@ -130,7 +130,8 @@ bool save_single_vehicle(struct veh_data *veh, bool fromCopyover) {
 
   // Previously, ownerless vehicles were saved, allowing them to disgorge contents on next load. This is bad for the economy. Instead, we just drop them.
   if (veh->owner > 0 && !does_player_exist(veh->owner)) {
-    mudlog_vfprintf(NULL, LOG_SYSLOG, "Vehicle '%s' no longer has a valid owner (was %ld). Locking it and refusing to save it.", GET_VEH_NAME(veh), veh->owner);
+    mudlog_vfprintf(NULL, LOG_SYSLOG, "Vehicle '%s' @ %ld no longer has a valid owner (was %ld). Locking it and refusing to save it.",
+                    GET_VEH_NAME(veh), GET_ROOM_VNUM(get_veh_in_room(veh)), veh->owner);
     // Auto-lock the doors to prevent cheese.
     veh->locked = TRUE;
     // Clear the owner. This vehicle will be DQ'd in should_save_this_vehicle() henceforth.
@@ -263,7 +264,7 @@ bool save_single_vehicle(struct veh_data *veh, bool fromCopyover) {
   std::vector<std::string> obj_strings;
   std::stringstream obj_string_buf;
   for (obj = veh->contents;obj;) {
-    if (!IS_OBJ_STAT(obj, ITEM_EXTRA_NORENT)) {
+    if (!OBJ_SHOULD_NOT_SAVE_IN_APTS_AND_VEHS(obj)) {
       obj_string_buf << "\t\tVnum:\t" << GET_OBJ_VNUM(obj) << "\n";
       obj_string_buf << "\t\tInside:\t" << level << "\n";
 
@@ -311,7 +312,7 @@ bool save_single_vehicle(struct veh_data *veh, bool fromCopyover) {
       obj_string_buf.str(std::string());
     }
 
-    if (obj->contains && !IS_OBJ_STAT(obj, ITEM_EXTRA_NORENT) && GET_OBJ_TYPE(obj) != ITEM_PART) {
+    if (obj->contains && !OBJ_SHOULD_NOT_SAVE_IN_APTS_AND_VEHS(obj) && GET_OBJ_TYPE(obj) != ITEM_PART) {
       obj = obj->contains;
       level++;
       continue;

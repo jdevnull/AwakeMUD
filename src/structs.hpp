@@ -467,6 +467,7 @@ struct char_player_data
   ush_int weight;              /* PC / NPC's weight                    */
   ush_int height;              /* PC / NPC's height                    */
   byte race;                 /* PC / NPC's race                      */
+  byte otaku_path;            /* PC / NPC's otaku status                       */
   byte tradition;            /* PC / NPC's tradition                       */
   ubyte aspect;
   char *host;   /* player host    */
@@ -475,7 +476,7 @@ struct char_player_data
       char_name(NULL), background(NULL), title(NULL), pretitle(NULL), whotitle(NULL),
       prompt(NULL), matrixprompt(NULL), poofin(NULL), poofout(NULL), email(NULL),
       multiplier(0), salvation_ticks(5), pronouns(PRONOUNS_NEUTRAL), level(0), last_room(NOWHERE),
-      weight(0), height(0), race(0), tradition(TRAD_MUNDANE), aspect(0), host(NULL)
+      weight(0), height(0), race(0), otaku_path(OTAKU_PATH_NORMIE), tradition(TRAD_MUNDANE), aspect(0), host(NULL)
   {
     memset(passwd, 0, sizeof(passwd));
   }
@@ -586,6 +587,7 @@ struct char_special_data_saved
   byte skills[MAX_SKILLS+1][3];   /* array of skills plus skill 0. Slot 0 is unaltered, */
   byte powers[ADEPT_NUMPOWER+1][2];
   unsigned char metamagic[META_MAX+1];
+  unsigned char echoes[ECHO_MAX+1];
   ush_int centeringskill;
   ush_int boosted[3][2];           /* str/qui/bod timeleft/amount		*/
   ubyte masking;
@@ -603,6 +605,7 @@ struct char_special_data_saved
     }
 
     ZERO_OUT_ARRAY(metamagic, META_MAX + 1);
+    ZERO_OUT_ARRAY(echoes, ECHO_MAX + 1);
 
     for (int i = 0; i < 3; i++) {
       ZERO_OUT_ARRAY(boosted[i], 2);
@@ -689,6 +692,7 @@ struct player_special_data_saved
   ubyte totemspirit;
   ush_int att_points;              /* attrib points for when you first create */
   ush_int skill_points;            /* starting skill points                   */
+  ush_int channel_points;          /* starting channel skill points for otaku */
   unsigned char force_points;
   unsigned char restring_points;
   int zonenum;
@@ -710,7 +714,7 @@ struct player_special_data_saved
   player_special_data_saved() :
     wimp_level(0), freeze_level(0), invis_level(0), incog_level(0), load_room(NOWHERE),
     last_in(0), last_veh(NOTHING), bad_pws(0), automod_counter(0), totem(0), totemspirit(0),
-    att_points(0), skill_points(0), force_points(0), restring_points(0), zonenum(0),
+    att_points(0), skill_points(0), channel_points(0), force_points(0), restring_points(0), zonenum(0),
     archetype(0), archetypal(FALSE), prestige_alt_id(0), system_points(0), 
     best_lifestyle(LIFESTYLE_SQUATTER), lifestyle_string(NULL)
   {
@@ -737,11 +741,14 @@ struct player_special_data
   ubyte perm_bod;
   struct room_data *watching;
   int wherelist_checks;
+  sh_int max_exdescs;
+
+  Bitfield covered_wearlocs;
 
   player_special_data() :
       aliases(NULL), remem(NULL), last_tell(0), questnum(0), obj_complete(NULL),
       mob_complete(NULL), mental_loss(0), physical_loss(0),
-      perm_bod(0), watching(NULL), wherelist_checks(0)
+      perm_bod(0), watching(NULL), wherelist_checks(0), max_exdescs(0)
   {
     ZERO_OUT_ARRAY(last_quest, QUEST_TIMER);
     ZERO_OUT_ARRAY(completed_quest, QUEST_TIMER);
@@ -750,6 +757,8 @@ struct player_special_data
     for (int i = 0; i < NUM_DRUGS; i++) {
       ZERO_OUT_ARRAY(drugs[i], NUM_DRUG_PLAYER_SPECIAL_FIELDS);
     }
+
+    covered_wearlocs.FromString("0");
   }
 }
 ;
@@ -939,6 +948,7 @@ struct char_data
   struct mob_special_data mob_specials;        /* NPC specials           */
   struct veh_data *in_veh;
   bool vfront;
+  struct char_data *hitched_to;         /* When using hitching, this is who we're connected to */
   struct matrix_icon *persona;
 
   struct spell_queue *squeue;
@@ -975,6 +985,7 @@ struct char_data
   // See invis_resistance_tests.cpp for details.
   std::unordered_map<idnum_t, bool> *pc_invis_resistance_test_results = {};
   std::unordered_map<idnum_t, bool> *mob_invis_resistance_test_results = {};
+  std::unordered_map<idnum_t, int> assense_recency = {};
 
   // Another unordered map to track who we've sent docwagon alerts to.
   std::unordered_map<idnum_t, bool> sent_docwagon_messages_to = {};
@@ -1001,10 +1012,10 @@ struct char_data
 #endif
 
   char_data() :
-      nr(0), unique_id(0), in_room(NULL), was_in_room(NULL), load_origin(0), load_time(time(0)), player_specials(NULL), in_veh(NULL), vfront(FALSE),
-      persona(NULL), squeue(NULL), sustained(NULL), ssust(NULL), carrying(NULL), desc(NULL), cyberware(NULL),
-      bioware(NULL), next_in_room(NULL), next_in_character_list(NULL), next_fighting(NULL), next_in_zone(NULL), next_in_veh(NULL),
-      next_watching(NULL), followers(NULL), master(NULL), spells(NULL), ignore_data(NULL), pgroup(NULL),
+      nr(0), unique_id(0), in_room(NULL), was_in_room(NULL), load_origin(0), load_time(time(0)), player_specials(NULL), in_veh(NULL),
+      vfront(FALSE), hitched_to(NULL), persona(NULL), squeue(NULL), sustained(NULL), ssust(NULL), carrying(NULL), desc(NULL),
+      cyberware(NULL), bioware(NULL), next_in_room(NULL), next_in_character_list(NULL), next_fighting(NULL), next_in_zone(NULL),
+      next_in_veh(NULL), next_watching(NULL), followers(NULL), master(NULL), spells(NULL), ignore_data(NULL), pgroup(NULL),
       pgroup_invitations(NULL), congregation_bonus_pool(0), last_loop_rand(0), pc_invis_resistance_test_results(NULL),
       mob_invis_resistance_test_results(NULL), alias_dirty_bit(FALSE), mob_loaded_in_room(NULL), precast_spells(NULL),
       is_carrying_vehicle(FALSE)
@@ -1058,6 +1069,7 @@ struct ccreate_t
   sh_int prestige_race;
   idnum_t prestige_bagholder;
   int prestige_cost;
+  bool is_otaku;
 };
 
 struct descriptor_data
@@ -1134,6 +1146,7 @@ struct descriptor_data
   ApartmentRoom *edit_apartment_room;
   ApartmentRoom *edit_apartment_room_original;
   Faction *edit_faction;
+  PCExDesc *edit_exdesc;
   // If you add more of these edit_whatevers, touch comm.cpp's free_editing_structs and add them!
 
   Playergroup *edit_pgroup; /* playergroups */
@@ -1264,9 +1277,11 @@ struct skill_data {
   sh_int attribute;
   bool is_knowledge_skill;
   bool requires_magic;
+  bool requires_resonance;
   sh_int group;
   bool reflex_recorder_compatible;
   bool no_defaulting_allowed;
+  bool is_nerps;
 };
 
 struct part_data {

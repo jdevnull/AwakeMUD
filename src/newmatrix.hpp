@@ -14,6 +14,9 @@
 
 #define FILE_PROTECTION_SCRAMBLED 1
 
+#define ICON_MATRIX         0  // This is just a normal persona or icon
+#define ICON_LIVING_PERSONA 1  // Weird otaku BS living persona
+
 #define IC_CRIPPLER         0  // Destroys programs.
 #define IC_KILLER           1  // NERP
 #define IC_PROBE            2  // NERP
@@ -206,6 +209,7 @@ struct deck_info {
   struct char_data *hitcher;
   struct obj_data *software;
   struct obj_data *deck;
+  struct obj_data *proxy_deck;
   struct seen_data *seen;
   struct char_data *ch;
   struct phone_data *phone;
@@ -214,7 +218,7 @@ struct deck_info {
     storage(0), response(0), io(0), res_det(0), res_test(0), ras(0), reality(0), iccm(0),
     tally(0), last_trigger(0), scout(0), located(FALSE),
     redirect(0), redirectedon(NULL), mxp(0), hitcher(NULL), software(NULL), deck(NULL),
-    seen(NULL), ch(NULL), phone(NULL)
+    proxy_deck(NULL), seen(NULL), ch(NULL), phone(NULL)
    {
      ZERO_OUT_ARRAY(asist, 2);
 
@@ -229,6 +233,7 @@ struct matrix_icon {
   char *long_desc;
   char *look_desc;
 
+  byte type;
   int idnum;
   rnum_t rnum;
   vnum_t vnum;
@@ -250,8 +255,8 @@ struct matrix_icon {
 #endif
 
   matrix_icon():
-    name(NULL), long_desc(NULL), look_desc(NULL), idnum(0), rnum(0), vnum(0),
-    condition(10), initiative(0), parry(0), evasion(0), position(0),
+    name(NULL), long_desc(NULL), look_desc(NULL), type(ICON_MATRIX), idnum(0), rnum(0),
+    vnum(0), condition(10), initiative(0), parry(0), evasion(0), position(0),
     decker(NULL), fighting(NULL), next(NULL), next_in_host(NULL), next_fighting(NULL)
   {
 #ifdef USE_DEBUG_CANARIES
@@ -263,5 +268,17 @@ struct matrix_icon {
 extern bool has_spotted(struct matrix_icon *icons, struct matrix_icon *targ);
 
 bool display_cyberdeck_issues(struct char_data *ch, struct obj_data *cyberdeck);
+
+/**
+ * @brief Notifies characters in the same room as `ch` about their hitcher disconnecting.
+ *
+ * This function checks if the character `ch` has a hitcher. If `shouldNotify` is true,
+ * it sends a message to the hitcher about the disconnection. It then clears out the
+ * relevant hitcher references and any associated flags.
+ *
+ * @param ch           The character whose hitcher status is being checked.
+ * @param shouldNotify If true, sends a message to the affected character(s).
+ */
+void clear_hitcher(struct char_data *ch, bool shouldNotify);
 
 #endif

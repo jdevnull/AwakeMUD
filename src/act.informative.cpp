@@ -979,18 +979,8 @@ void look_at_char(struct char_data * i, struct char_data * ch, const char *used_
       send_to_char("", ch);
     }
 
-#ifdef PLAYER_EXDESCS
-    if (CHAR_HAS_EXDESCS(i) && used_keyword && *used_keyword) {
-      char uppercase[strlen(used_keyword) + 1];
-      for (size_t idx = 0; idx < strlen(used_keyword); idx++) { uppercase[idx] = toupper(used_keyword[idx]); }
-      uppercase[strlen(used_keyword)] = '\0';
-
-      send_to_char(ch, "%s %s extra descriptions set. Use ^WLOOK %s EXDESCS^n for more.\r\n",
-                   CAP(HSSH(i)),
-                   HASHAVE(i),
-                   uppercase);
-    }
-#endif
+    if (used_keyword && *used_keyword)
+      send_exdescs_on_look(ch, i, used_keyword);
 
     if (i != ch && GET_HEIGHT(i) > 0 && GET_WEIGHT(i) > 0) {
       if ((GET_HEIGHT(i) % 10) < 5)
@@ -1015,8 +1005,10 @@ void look_at_char(struct char_data * i, struct char_data * ch, const char *used_
     diag_char_to_char(i, ch);
     if (SEES_ASTRAL(ch)) {
       bool dual = TRUE, init = TRUE;
-      if (GET_GRADE(i)) {
-        int targ = MAX(1, GET_GRADE(ch) - GET_GRADE(i));
+      int grade = GET_GRADE(i);
+      if (IS_OTAKU(i) && !PLR_FLAGGED(i, PLR_MATRIX)) grade = 0; // Otaku only show auras while decking, NERPs
+      if (grade) {
+        int targ = MAX(1, GET_GRADE(ch) - grade);
         if (GET_METAMAGIC(i, META_MASKING)) {
           if (!GET_GRADE(ch) || success_test(GET_MAG(ch) / 100, GET_MAG(i) / 100) < targ) {
             if (IS_SET(GET_MASKING(i), MASK_INIT) || IS_SET(GET_MASKING(i), MASK_COMPLETE))
@@ -1025,17 +1017,18 @@ void look_at_char(struct char_data * i, struct char_data * ch, const char *used_
               dual = FALSE;
           }
         }
+
         if (init) {
           snprintf(buf, sizeof(buf), "%s aura is ", CAP(HSHR(i)));
-          if (GET_GRADE(i) > 20)
+          if (grade > 20)
             strlcat(buf, "^Wblindingly bright^n.", sizeof(buf));
-          else if (GET_GRADE(i) > 16)
+          else if (grade > 16)
             strlcat(buf, "^Wbrilliant^n.", sizeof(buf));
-          else if (GET_GRADE(i) > 12)
+          else if (grade > 12)
             strlcat(buf, "^Wbright^n.", sizeof(buf));
-          else if (GET_GRADE(i) > 8)
+          else if (grade > 8)
             strlcat(buf, "^Wa strong glow^n.", sizeof(buf));
-          else if (GET_GRADE(i) > 4)
+          else if (grade > 4)
             strlcat(buf, "^Wglowing^n.", sizeof(buf));
           else strlcat(buf, "^Wa lambent glow^n.", sizeof(buf));
           strlcat(buf, "\r\n", sizeof(buf));
@@ -1436,7 +1429,8 @@ void list_one_char(struct char_data * i, struct char_data * ch)
           }
         }
         if (MOB_HAS_SPEC(i, johnson)) {
-          if (get_johnson_overall_max_rep(i) >= GET_REP(ch)) {
+          unsigned int max_rep = get_johnson_overall_max_rep(i);
+          if (max_rep >= GET_REP(ch) || max_rep >= 10000) {
             snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "^y...%s%s might have a job for you.%s^n\r\n",
                      HSSH(i),
                      already_printed ? " also" : "",
@@ -1651,6 +1645,8 @@ void list_one_char(struct char_data * i, struct char_data * ch)
     strlcat(buf, " is here, working on a cyberdeck.", sizeof(buf));
   else if (AFF_FLAGGED(i, AFF_SPELLDESIGN))
     strlcat(buf, " is here, working on a spell design.", sizeof(buf));
+  else if (AFF_FLAGGED(i, AFF_COMPLEX_FORM_PROGRAM))
+    strlcat(buf, " is here, meditating on a complex form.", sizeof(buf));
   else if (AFF_FLAGGED(i, AFF_CONJURE))
     strlcat(buf, " is here, performing a conjuring ritual.", sizeof(buf));
   else if (AFF_FLAGGED(i, AFF_LODGE))
@@ -2503,13 +2499,13 @@ void _send_obj_contents_info_to_char(struct obj_data *obj, struct char_data *ch,
   send_to_char(GET_OBJ_NAME(obj), ch);
   switch (bits) {
     case FIND_OBJ_INV:
-      send_to_char(" (carried): ", ch);
+      send_to_char(" (carried): \r\n", ch);
       break;
     case FIND_OBJ_ROOM:
-      send_to_char(" (here): ", ch);
+      send_to_char(" (here): \r\n", ch);
       break;
     case FIND_OBJ_EQUIP:
-      send_to_char(" (used): ", ch);
+      send_to_char(" (used): \r\n", ch);
       break;
   }
   if (obj->contains) {
@@ -2730,12 +2726,8 @@ void look_at_target(struct char_data * ch, char *arg, char *extra_args)
   /* Is the target a character? */
   if (found_char != NULL)
   {
-#ifdef PLAYER_EXDESCS
     // If this isn't an exdesc invocation, look at the character.
     if (!look_at_exdescs(ch, found_char, extra_args)) {
-#else
-    {
-#endif
       look_at_char(found_char, ch, arg);
     }
     /*
@@ -2751,12 +2743,8 @@ void look_at_target(struct char_data * ch, char *arg, char *extra_args)
   {
     found_char = get_char_veh(ch, arg, ch->in_veh);
     if (found_char) {
-#ifdef PLAYER_EXDESCS
       // If this isn't an exdesc invocation, look at the character.
       if (!look_at_exdescs(ch, found_char, arg)) {
-#else
-      {
-#endif
         look_at_char(found_char, ch, arg);
       }
       /*
@@ -3472,11 +3460,11 @@ void do_probe_object(struct char_data * ch, struct obj_data * j, bool is_in_shop
       if (GET_BIOWARE_RATING(j) > 0) {
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "It is a ^crating-%d %s%s^n that uses ^c%.2f^n index when installed.",
                 GET_BIOWARE_RATING(j), GET_BIOWARE_IS_CULTURED(j) ? "cultured " : "",
-                decap_bio_types[GET_BIOWARE_TYPE(j)], ((float) GET_BIOWARE_ESSENCE_COST(j) / 100));
+                decap_bio_types[GET_BIOWARE_TYPE(j)], ((float) calculate_ware_essence_or_index_cost(ch, j) / 100));
       } else {
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "It is a ^c%s%s^n that uses ^c%.2f^n index when installed.",
                 GET_BIOWARE_IS_CULTURED(j) ? "cultured " : "",
-                decap_bio_types[GET_BIOWARE_TYPE(j)], ((float) GET_BIOWARE_ESSENCE_COST(j) / 100));
+                decap_bio_types[GET_BIOWARE_TYPE(j)], ((float) calculate_ware_essence_or_index_cost(ch, j) / 100));
       }
       break;
     case ITEM_CYBERWARE:
@@ -3620,7 +3608,7 @@ void do_probe_object(struct char_data * ch, struct obj_data * j, bool is_in_shop
               decap_cyber_grades[GET_CYBERWARE_GRADE(j)],
               flag_parse,
               decap_cyber_types[GET_CYBERWARE_TYPE(j)],
-              ((float) GET_CYBERWARE_ESSENCE_COST(j) / 100));
+              ((float) calculate_ware_essence_or_index_cost(ch, j) / 100));
       
       switch (GET_CYBERWARE_TYPE(j)) {
         case CYB_HANDRAZOR:
@@ -5156,12 +5144,13 @@ ACMD(do_score)
         strlcat(mage_string, "Physical Adept", sizeof(mage_string));
         break;
       default:
-        strlcat(mage_string, "Mundane", sizeof(mage_string));
+        if (IS_OTAKU(ch)) strlcat(mage_string, "Otaku", sizeof(mage_string));
+        else strlcat(mage_string, "Mundane", sizeof(mage_string));
         break;
     }
 
     static char grade_string[50];
-    if (GET_TRADITION(ch) != TRAD_MUNDANE)
+    if (GET_TRADITION(ch) != TRAD_MUNDANE || IS_OTAKU(ch))
       snprintf(grade_string, sizeof(grade_string), "^nGrade: ^w[^W%2d^w]", GET_GRADE(ch));
     else
       strlcpy(grade_string, "", sizeof(grade_string));
@@ -5276,17 +5265,17 @@ ACMD(do_cyberware)
   for (obj = ch->cyberware; obj != NULL; obj = obj->next_content) {
     if (GET_CYBERWARE_TYPE(obj) == CYB_FINGERTIP) {
       if (obj->contains && GET_OBJ_TYPE(obj->contains) == ITEM_WEAPON && GET_HOLSTER_READY_STATUS(obj) ) {
-        snprintf(buf, sizeof(buf), "%-32s ^Y(W) (R)^n Essence: ^c%0.2f^n\r\n", GET_OBJ_NAME(obj), ((float)GET_CYBERWARE_ESSENCE_COST(obj) / 100) * ((IS_GHOUL(ch) || IS_DRAKE(ch)) ? 2 : 1));
+        snprintf(buf, sizeof(buf), "%-32s ^Y(W) (R)^n Essence: ^c%0.2f^n\r\n", GET_OBJ_NAME(obj), ((float)calculate_ware_essence_or_index_cost(ch, obj) / 100));
         send_to_char(buf, ch);
         continue;
       }
       else if (obj->contains && GET_OBJ_TYPE(obj->contains) == ITEM_WEAPON && !GET_HOLSTER_READY_STATUS(obj)) {
-        snprintf(buf, sizeof(buf), "%-36s ^Y(W)^n Essence: ^c%0.2f^n\r\n", GET_OBJ_NAME(obj), ((float)GET_CYBERWARE_ESSENCE_COST(obj) / 100) * ((IS_GHOUL(ch) || IS_DRAKE(ch)) ? 2 : 1));
+        snprintf(buf, sizeof(buf), "%-36s ^Y(W)^n Essence: ^c%0.2f^n\r\n", GET_OBJ_NAME(obj), ((float)calculate_ware_essence_or_index_cost(ch, obj) / 100));
         send_to_char(buf, ch);
         continue;
       }
       else if (obj->contains) {
-        snprintf(buf, sizeof(buf), "%-36s ^Y(F)^n Essence: ^c%0.2f^n\r\n", GET_OBJ_NAME(obj), ((float)GET_CYBERWARE_ESSENCE_COST(obj) / 100) * ((IS_GHOUL(ch) || IS_DRAKE(ch)) ? 2 : 1));
+        snprintf(buf, sizeof(buf), "%-36s ^Y(F)^n Essence: ^c%0.2f^n\r\n", GET_OBJ_NAME(obj), ((float)calculate_ware_essence_or_index_cost(ch, obj) / 100));
         send_to_char(buf, ch);
         continue;
       }
@@ -5311,7 +5300,7 @@ ACMD(do_cyberware)
 
     snprintf(buf, sizeof(buf), "%-40s Essence: ^c%0.2f^n%s\r\n",
              GET_OBJ_NAME(obj),
-             ((float)GET_CYBERWARE_ESSENCE_COST(obj) / 100) * ((IS_GHOUL(ch) || IS_DRAKE(ch)) ? 2 : 1),
+             (float)calculate_ware_essence_or_index_cost(ch, obj) / 100,
              retraction_string
            );
     send_to_char(buf, ch);
@@ -5334,12 +5323,12 @@ ACMD(do_bioware)
                    GET_OBJ_NAME(obj),
                    GET_BIOWARE_PUMP_ADRENALINE(obj) *2,
                    GET_BIOWARE_RATING(obj),
-                   ((float)GET_BIOWARE_ESSENCE_COST(obj) / 100) * (IS_DRAKE(ch) ? 2 : 1));
+                   ((float)calculate_ware_essence_or_index_cost(ch, obj) / 100));
     } else {
       send_to_char(ch, "%-40s Rating: %-2d     Bioware Index: %0.2f\r\n",
                    GET_OBJ_NAME(obj),
                    GET_BIOWARE_RATING(obj),
-                   ((float)GET_BIOWARE_ESSENCE_COST(obj) / 100) * (IS_DRAKE(ch) ? 2 : 1));
+                   ((float)calculate_ware_essence_or_index_cost(ch, obj) / 100));
     }
   }
 }
@@ -5994,11 +5983,11 @@ ACMD(do_who)
       }
 
       if (GET_TKE(tch) <= NEWBIE_KARMA_THRESHOLD && !IS_SENATOR(tch) && !IS_PRESTIGE_CH(tch)) {
-        strlcat(buf1, " ^y(Newbie)^n", sizeof(buf1));
+        strlcat(buf1, GET_TITLE(tch) ? " ^y(Newbie)^n" : "^y(Newbie)^n", sizeof(buf1));
       }
 
       if (AFF_FLAGS(tch).AreAnySet(BR_TASK_AFF_FLAGS, ENDBIT))
-        strlcat(buf1, " (B/R)", sizeof(buf1));
+        strlcat(buf1, GET_TITLE(tch) ? " (B/R)" : "(B/R)", sizeof(buf1));
       if (PRF_FLAGGED(tch, PRF_AFK))
         strlcat(buf1, " (AFK)", sizeof(buf1));
       if (PLR_FLAGGED(tch, PLR_RPE) && (level > LVL_MORTAL || PLR_FLAGGED(ch, PLR_RPE)))
@@ -6097,6 +6086,7 @@ ACMD(do_who)
   if (subcmd) {
     convert_and_write_string_to_file(buf2, "text/wholist");
     write_gsgp_file(num_can_see, "text/gsgp");
+    MSSPSetPlayers(num_can_see);
   } else send_to_char(buf2, ch);
 }
 
@@ -6117,6 +6107,10 @@ ACMD(do_users)
   host_search[0] = name_search[0] = '\0';
 
   std::unordered_map< std::string, std::vector<std::string> > host_map = {};
+
+#ifndef IS_BUILDPORT
+  mudlog_vfprintf(ch, LOG_WIZLOG, "%s looking up user list with args '%s'", GET_CHAR_NAME(ch), argument);
+#endif
 
   strlcpy(buf, argument, sizeof(buf));
   while (*buf) {
@@ -6467,6 +6461,9 @@ void perform_immort_where(struct char_data * ch, char *arg)
 
   if (!*arg)
   {
+#ifndef IS_BUILDPORT
+    mudlog_vfprintf(ch, LOG_WIZLOG, "%s queried locations of all players.", GET_CHAR_NAME(ch));
+#endif
     strlcpy(buf, "Players\r\n-------\r\n", sizeof(buf));
     for (d = descriptor_list; d; d = d->next)
       if (!d->connected) {
@@ -6499,6 +6496,10 @@ void perform_immort_where(struct char_data * ch, char *arg)
     page_string(ch->desc, buf, 1);
     return;
   }
+
+#ifndef IS_BUILDPORT
+  mudlog_vfprintf(ch, LOG_WIZLOG, "%s queried locations of anything with keyword '%s'.", GET_CHAR_NAME(ch), arg);
+#endif
 
   // Location version of the command (where <keyword>)
   *buf = '\0';
@@ -6563,7 +6564,7 @@ ACMD(do_consider)
 
     // Pick out the victim's cyberware, if any. TODO: Player cyberware.
     bool victim_uses_cyber_implants = FALSE, ch_uses_cyber_implants = FALSE;
-    int vict_unarmed_dangerliciousness_boost = 0, ch_unarmed_dangerliciousness_boost;
+    int vict_unarmed_dangerliciousness_boost = 0, ch_unarmed_dangerliciousness_boost = 0;
     for (struct obj_data *obj = victim->cyberware; obj; obj = obj->next_content) {
       if (!GET_CYBERWARE_IS_DISABLED(obj)) {
         switch (GET_CYBERWARE_TYPE(obj)) {
@@ -7336,6 +7337,10 @@ ACMD(do_status)
       targ = get_char_vis(ch, argument);
     if (!targ)
       targ = ch;
+
+    if (targ != ch) {
+      mudlog_vfprintf(ch, LOG_WIZLOG, "%s viewing status/affects for %s.", GET_CHAR_NAME(ch), GET_CHAR_NAME(targ));
+    }
   }
 
   char aff_buf[10000] = { '\0' };

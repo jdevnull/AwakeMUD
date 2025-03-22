@@ -340,10 +340,16 @@ ACMD(do_copyover)
   snprintf(buf, sizeof(buf), "Copyover initiated by %s", GET_CHAR_NAME(ch));
   mudlog(buf, ch, LOG_WIZLOG, TRUE);
 
-  log("COPYOVERLOG: Shifting flying folks to a runway.");
-  struct room_data *boneyard = &world[real_room(65505)];
-  struct room_data *airborne = &world[real_room(RM_AIRBORNE)];
-  if (boneyard && airborne) {
+  rnum_t airborne_rnum = real_room(RM_AIRBORNE);
+  rnum_t boneyard_rnum = real_room(65505);
+
+  if (boneyard_rnum < 0 || airborne_rnum < 0) {
+    log("COPYOVERLOG: Skipping flying folks, you have no airborne room and/or boneyard.");
+  } else {
+    log("COPYOVERLOG: Shifting flying folks to a runway.");
+    struct room_data *boneyard = &world[boneyard_rnum];
+    struct room_data *airborne = &world[airborne_rnum];
+
     for (struct veh_data *aircraft = airborne->vehicles, *next_veh; aircraft; aircraft = next_veh) {
       next_veh = aircraft->next_veh;
       mudlog_vfprintf(aircraft->people, LOG_SYSLOG, "Transferring '%s' to Boneyard for copyover.", GET_VEH_NAME(aircraft));
@@ -1164,6 +1170,7 @@ ACMD(do_vnum)
 }
 #undef VNUM_USAGE_STRING
 
+SPECIAL(traffic);
 void do_stat_room(struct char_data * ch)
 {
   struct extra_descr_data *desc;
@@ -1177,14 +1184,22 @@ void do_stat_room(struct char_data * ch)
   send_to_char(ch, "Room name: ^c%s\r\n", rm->name);
 
   sprinttype(rm->sector_type, spirit_name, buf2, sizeof(buf2));
-  snprintf(buf, sizeof(buf), "Zone: [%d (%d)], VNum: [^g%8ld^n], RNum: [%5ld], Rating: [%2d], Type: %s\r\n",
-          zone_table[rm->zone].number, rm->zone, rm->number, real_room(rm->number), rm->rating, buf2);
-  send_to_char(buf, ch);
+  send_to_char(ch, "Zone: [%d (%d)], VNum: [^g%8ld^n], RNum: [%5ld], Rating: [%2d], Type: %s\r\n",
+               zone_table[rm->zone].number,
+               rm->zone,
+               rm->number,
+               real_room(rm->number),
+               rm->rating,
+               buf2);
 
   rm->room_flags.PrintBits(buf2, MAX_STRING_LENGTH, room_bits, ROOM_MAX);
-  snprintf(buf, sizeof(buf), "Extra: [%4d], SpecProc: %s, Flags: %s Light: %s Smoke: %s\r\n", rm->spec,
-          (rm->func == NULL) ? "None" : "^CExists^n", buf2, light_levels[light_level(rm)], light_levels[rm->vision[1]]);
-  send_to_char(buf, ch);
+  send_to_char(ch, "Extra: [%4d], SpecProc: %s, Flags: %s Light: %s Smoke: %s, jurisdiction %s\r\n",
+               rm->spec,
+               (rm->func == NULL) ? "None" : (rm->func == traffic ? "^CTraffic^n" : "^CExists^n"),
+               buf2,
+               light_levels[light_level(rm)],
+               light_levels[rm->vision[1]],
+               jurisdictions[GET_JURISDICTION(rm)]);
 
   send_to_char(ch, "Effects: light[^c%d^n][^c%d^n][^c%d^n], peaceful[^c%d^n], poltergeist[^c%d^n][^c%d^n], icesheet[^c%d^n][^c%d^n], shadow[^c%d^n][^c%d^n], silence[^c%d^n][^c%d^n]\r\n",
                rm->light[0],
@@ -4126,6 +4141,10 @@ ACMD(do_zreset)
 
 ACMD(do_wiztitle)
 {
+#ifdef IS_BUILDPORT
+  send_to_char("Titles are disabled on the buildport.\r\n", ch);
+  return;
+#else
   if (IS_NPC(ch))
     send_to_char("Your title is fine... go away.\r\n", ch);
   else if (PLR_FLAGGED(ch, PLR_NOTITLE))
@@ -4162,6 +4181,7 @@ ACMD(do_wiztitle)
       mysql_wrapper(mysql, buf);
     }
   }
+#endif
 }
 
 /*
@@ -4309,15 +4329,17 @@ ACMD(do_wizutil)
 /* single zone printing fn used by "show zone" so it's not repeated in the
    code 3 times ... -je, 4/6/93 */
 
+extern const char *render_zone_editor_ids(struct zone_data *zon, char *string_to_write_to, size_t str_sz);
 void print_zone_to_buf(char *bufptr, int buf_size, int zone, int detailed, struct char_data *ch)
 {
   int i, color = 0;
 
   if (!ch_can_bypass_edit_lock(ch, &zone_table[zone])) {
-    snprintf(bufptr, buf_size - strlen(bufptr), "%4d %-30.30s^n %s (<redacted>) Age: ???; Res: ??? (?); Top: %6d; Sec: ??\r\n",
+    snprintf(bufptr, buf_size - strlen(bufptr), "%4d %-30.30s^n %s%s (<redacted>) Age: ???; Res: ??? (?); Top: %6d; Sec: ??\r\n",
              zone_table[zone].number,
              "<redacted>",
-             zone_table[zone].connected ? "* " : "  ",
+             zone_table[zone].editing_restricted_to_admin ? "L" : " ",
+             zone_table[zone].approved ? "A" : " ",
              zone_table[zone].top);
     return;
   }
@@ -4343,18 +4365,36 @@ void print_zone_to_buf(char *bufptr, int buf_size, int zone, int detailed, struc
       }
     }
 
-  if (!detailed) {
-    snprintf(bufptr, buf_size - strlen(bufptr), "%4d %-30.30s^n ", zone_table[zone].number,
+  if (detailed == 0 || detailed == 2) {
+    snprintf(bufptr, buf_size - strlen(bufptr), "^c%5d^n %-40.40s^n ", zone_table[zone].number,
             zone_table[zone].name);
     for (i = 0; i < color; i++)
       strlcat(bufptr, " ", buf_size);
-    snprintf(ENDOF(bufptr), buf_size - strlen(bufptr), "%s (%20s) Age: %3d; Res: %3d (%1d); Top: %6d; Sec: %2d\r\n",
-            zone_table[zone].connected ? "* " : "  ",
+
+    if (detailed == 2) {
+      // Completed zones. We want info on the editors and the name of the first room.
+      char editor_writeout[1000];
+      rnum_t first_room_rnum = real_room(zone_table[zone].number * 100);
+      snprintf(ENDOF(bufptr), buf_size - strlen(bufptr), "(%s): %s^n\r\n",
+               render_zone_editor_ids(&zone_table[zone], editor_writeout, sizeof(editor_writeout)),
+               first_room_rnum >= 0 ? GET_ROOM_NAME(&world[first_room_rnum]) : "<no room at 00>");
+    } else {
+      // All zones.
+      const char *sec_color = "^n";
+      if (zone_table[zone].security >= 10)
+        sec_color = "^r";
+      else if (zone_table[zone].security >= 7)
+        sec_color = "^y";
+
+      snprintf(ENDOF(bufptr), buf_size - strlen(bufptr), "%s%s (%-3.3s) Age: %3d; Res: %3d (%1d); Top: ^c%6d^n; Sec: %s%2d^n\r\n",
+            zone_table[zone].editing_restricted_to_admin ? "L" : " ",
+            zone_table[zone].approved ? "A" : " ",
             jurisdictions[zone_table[zone].jurisdiction],
             zone_table[zone].age, zone_table[zone].lifespan,
             zone_table[zone].reset_mode, zone_table[zone].top,
-            zone_table[zone].security);
-  } else {
+            sec_color, zone_table[zone].security);
+    }
+  } else if (detailed == 1) {
     int rooms = 0, objs = 0, mobs = 0, shops = 0, vehs = 0;
     for (i = 0; i <= top_of_world && world[i].number <= zone_table[zone].top; i++)
       if (world[i].number >= (zone_table[zone].number * 100))
@@ -4375,13 +4415,15 @@ void print_zone_to_buf(char *bufptr, int buf_size, int zone, int detailed, struc
     snprintf(bufptr, buf_size, "Zone %d (%d): %s^n\r\n"
             "Age: %d, Commands: %d, Reset: %d (%d), Top: %d\r\n"
             "Rooms: %d, Mobiles: %d, Objects: %d, Shops: %d, Vehicles: %d\r\n"
-            "Security: %d, Status: %s^n\r\nJurisdiction: %s^n, Editors: ",
+            "Security: %d, Status: %s%s^n\r\nJurisdiction: %s^n, Editors: <not implemented>",
             zone_table[zone].number, zone, zone_table[zone].name,
             zone_table[zone].age, zone_table[zone].num_cmds,
             zone_table[zone].lifespan, zone_table[zone].reset_mode,
             zone_table[zone].top, rooms, mobs, objs, shops, vehs,
             zone_table[zone].security,
-            zone_table[zone].connected ? "Connected" : "In Progress", jurisdictions[zone_table[zone].jurisdiction]);
+            zone_table[zone].editing_restricted_to_admin ? "Editing Locked" : "",
+            zone_table[zone].approved ? ", Approved and Connected" : " ",
+            jurisdictions[zone_table[zone].jurisdiction]);
 /* FIXCHE   for (i = 0; i < NUM_ZONE_EDITOR_IDS; i++) {
       const char *name = playerDB.GetNameV(zone_table[zone].editor_ids[i]);
 
@@ -4492,6 +4534,7 @@ ACMD(do_show)
                { "extraflag",       LVL_BUILDER },
                { "affflag",         LVL_BUILDER },
                { "mobflag",         LVL_BUILDER },
+               { "finishedzones",   LVL_BUILDER },
                { "\n", 0 }
              };
 
@@ -4646,7 +4689,7 @@ ACMD(do_show)
       if (ROOM_FLAGGED(&world[i], ROOM_DEATH))
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%2d: [%8ld] %s %s\r\n", ++j,
                 world[i].number,
-                vnum_from_non_connected_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                vnum_from_non_approved_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                 world[i].name);
     send_to_char(buf, ch);
     break;
@@ -4657,7 +4700,7 @@ ACMD(do_show)
     for (i = 0, j = 0; i <= zone_table[real_zone(GOD_ROOMS_ZONE)].top; i++)
       if (world[i].zone == GOD_ROOMS_ZONE && i > 1 && !(i >= 8 && i <= 12))
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%2d: [%8ld] %s %s\r\n", j++, world[i].number,
-                vnum_from_non_connected_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                vnum_from_non_approved_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                 world[i].name);
     send_to_char(buf, ch);
     break;
@@ -4828,7 +4871,7 @@ ACMD(do_show)
       if (!room_has_any_exits(&world[i])) {
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%4d: [%6ld] %s %s^n\r\n", ++j,
                 world[i].number,
-                vnum_from_non_connected_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                vnum_from_non_approved_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                 world[i].name);
       }
     }
@@ -4843,7 +4886,7 @@ ACMD(do_show)
           if (!room_has_any_exits(world[i].dir_option[dir]->to_room)) {
             snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%4d: [%6ld] %s %s^n: %s^n\r\n", ++j,
                     world[i].number,
-                    vnum_from_non_connected_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                    vnum_from_non_approved_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                     world[i].name,
                     dirs[dir]);
             break;
@@ -4873,7 +4916,7 @@ ACMD(do_show)
       if (ROOM_FLAGGED(&world[i], ROOM_STORAGE))
         snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%4d: [%8ld] %s %s^n\r\n", ++j,
                 world[i].number,
-                vnum_from_non_connected_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                vnum_from_non_approved_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                 world[i].name);
     send_to_char(buf, ch);
     break;
@@ -4885,7 +4928,7 @@ ACMD(do_show)
         if (world[i].dir_option[k] && world[i].dir_option[k]->hidden > ANOMALOUS_HIDDEN_RATING_THRESHOLD) {
           send_to_char(ch, "%4d: [%8ld] %s %s^n: %s exit has hidden rating %d > %d\r\n", ++j,
                   world[i].number,
-                  vnum_from_non_connected_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                  vnum_from_non_approved_zone(world[i].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                   world[i].name,
                   dirs[k],
                   world[i].dir_option[k]->hidden,
@@ -4901,7 +4944,7 @@ ACMD(do_show)
       printed = FALSE;
 
       // Skip non-connected areas or known staff areas.
-      if (vnum_from_non_connected_zone(GET_MOB_VNUM(&mob_proto[i]))
+      if (vnum_from_non_approved_zone(GET_MOB_VNUM(&mob_proto[i]))
           || GET_MOB_VNUM(&mob_proto[i]) < 100
           || (GET_MOB_VNUM(&mob_proto[i]) >= 1000 && GET_MOB_VNUM(&mob_proto[i]) <= 1099)
           || (GET_MOB_VNUM(&mob_proto[i]) >= 10000 && GET_MOB_VNUM(&mob_proto[i]) <= 10099))
@@ -4914,7 +4957,7 @@ ACMD(do_show)
 
       snprintf(buf, sizeof(buf), "%4d: [%8ld] %s %s^n", ++j,
                GET_MOB_VNUM(&mob_proto[i]),
-               vnum_from_non_connected_zone(GET_MOB_VNUM(&mob_proto[i])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+               vnum_from_non_approved_zone(GET_MOB_VNUM(&mob_proto[i])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                GET_CHAR_NAME(&mob_proto[i]));
 
       // Flag mobs with crazy stats
@@ -4978,7 +5021,7 @@ ACMD(do_show)
             if (ROOM_FLAGGED(&world[k], i) && ch_can_bypass_edit_lock(ch, &world[k]))
               send_to_char(ch, "%4d: [%8ld] %s %s\r\n", ++j,
                            world[k].number,
-                           vnum_from_non_connected_zone(world[k].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                           vnum_from_non_approved_zone(world[k].number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                            world[k].name);
           return;
         }
@@ -4999,7 +5042,7 @@ ACMD(do_show)
         send_to_char(ch, "%4d) [%8ld] %s %s^n\r\n",
                      j++,
                      GET_OBJ_VNUM(&obj_proto[i]),
-                     vnum_from_non_connected_zone(GET_OBJ_VNUM(&obj_proto[i])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                     vnum_from_non_approved_zone(GET_OBJ_VNUM(&obj_proto[i])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                      GET_OBJ_NAME(&obj_proto[i]));
       }
     }
@@ -5080,7 +5123,7 @@ ACMD(do_show)
   case 29:
     send_to_char("The following shopkeepers have intelligence above their racial maximums:\r\n", ch);
     for (struct char_data *mob = character_list; mob; mob = mob->next_in_character_list) {
-      int max_allowed = (GET_RACE(mob) <= RACE_UNDEFINED ? 6 : racial_limits[(int) GET_RACE(mob)][RACIAL_LIMITS_NORMAL][INT]);
+      int max_allowed = (GET_RACE(mob) <= RACE_UNDEFINED ? 6 : get_attr_max(mob, INT));
       if (MOB_HAS_SPEC(mob, shop_keeper) && GET_REAL_INT(mob) > max_allowed) {
         // Only show it on shops that negotiate.
         bool shop_negotiates = FALSE;
@@ -5115,14 +5158,14 @@ ACMD(do_show)
     }
     break;
   case 31:
-    send_to_char("The following non-key items are used as keys for at least one door in a connected zone:\r\n", ch);
+    send_to_char("The following non-key items are used as keys for at least one door in an approved zone:\r\n", ch);
     {
       std::unordered_map<vnum_t, bool> seen_items = {};
 
       for (int idx = 0; idx < top_of_world; idx++) {
         struct room_data *room = &world[idx];
 
-        if (vnum_from_non_connected_zone(GET_ROOM_VNUM(room)))
+        if (vnum_from_non_approved_zone(GET_ROOM_VNUM(room)))
           continue;
         
         for (int dir = 0; dir < NUM_OF_DIRS; dir++) {
@@ -5160,7 +5203,7 @@ ACMD(do_show)
       if (!ch_can_bypass_edit_lock(ch, &zone_table[idx]))
         continue;
 
-      if (zone_table[idx].connected
+      if (zone_table[idx].editing_restricted_to_admin
           && zone_table[idx].num_cmds > 0
           && (zone_table[idx].lifespan > 20 || zone_table[idx].reset_mode == ZONE_RESET_NEVER))
       {
@@ -5175,7 +5218,7 @@ ACMD(do_show)
     send_to_char("The following killable, connected NPCs have magic 12 or higher:\r\n", ch);
     for (rnum_t mob_idx = 0; mob_idx < top_of_mobt; mob_idx++) {
       struct char_data *mob = &mob_proto[mob_idx];
-      if (GET_MAG(mob) / 100 < 12 || vnum_from_non_connected_zone(GET_MOB_VNUM(mob)) || MOB_FLAGGED(mob, MOB_NOKILL))
+      if (GET_MAG(mob) / 100 < 12 || vnum_from_editing_restricted_zone(GET_MOB_VNUM(mob)) || MOB_FLAGGED(mob, MOB_NOKILL))
         continue;
       if (!ch_can_bypass_edit_lock(ch, mob))
         continue;
@@ -5208,7 +5251,7 @@ ACMD(do_show)
             if (IS_OBJ_STAT(&obj_proto[k], i) && ch_can_bypass_edit_lock(ch, &obj_proto[k]))
               snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%6d: [%8ld] %s %s\r\n", ++j,
                        GET_OBJ_VNUM(&obj_proto[k]),
-                       vnum_from_non_connected_zone(GET_OBJ_VNUM(&obj_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                       !vnum_from_non_approved_zone(GET_OBJ_VNUM(&obj_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                        GET_OBJ_NAME(&obj_proto[k]));
           page_string(ch->desc, buf, 1);
           return;
@@ -5230,14 +5273,14 @@ ACMD(do_show)
             if (GET_OBJ_AFFECT(&obj_proto[k]).IsSet(i) && ch_can_bypass_edit_lock(ch, &obj_proto[k]))
               snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%6d: [%8ld] %s %s\r\n", ++j,
                        GET_OBJ_VNUM(&obj_proto[k]),
-                       vnum_from_non_connected_zone(GET_OBJ_VNUM(&obj_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                       vnum_from_non_approved_zone(GET_OBJ_VNUM(&obj_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                        GET_OBJ_NAME(&obj_proto[k]));
           snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "\r\nMobs with affflag %s set:\r\n", affected_bits[i]);
           for (k = 0, j = 0; k <= top_of_mobt; k++)
             if (AFF_FLAGGED(&mob_proto[k], i) && ch_can_bypass_edit_lock(ch, &mob_proto[k]))
               snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%6d: [%8ld] %s %s\r\n", ++j,
                        GET_MOB_VNUM(&mob_proto[k]),
-                       vnum_from_non_connected_zone(GET_MOB_VNUM(&mob_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                       vnum_from_non_approved_zone(GET_MOB_VNUM(&mob_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                        GET_CHAR_NAME(&mob_proto[k]));
           page_string(ch->desc, buf, 1);
           return;
@@ -5259,7 +5302,7 @@ ACMD(do_show)
             if (MOB_FLAGGED(&mob_proto[k], i) && ch_can_bypass_edit_lock(ch, &mob_proto[k]))
               snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%6d: [%8ld] %s %s\r\n", ++j,
                        GET_MOB_VNUM(&mob_proto[k]),
-                       vnum_from_non_connected_zone(GET_MOB_VNUM(&mob_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+                       vnum_from_non_approved_zone(GET_MOB_VNUM(&mob_proto[k])) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
                        GET_CHAR_NAME(&mob_proto[k]));
           page_string(ch->desc, buf, 1);
           return;
@@ -5270,6 +5313,284 @@ ACMD(do_show)
     send_to_char("Please specify a single mobflag from the following list:\r\n", ch);
     for (i = 0; i < MOB_MAX; i++)
       send_to_char(ch, "  %s\r\n", action_bits[i]);
+    return;
+  case 40:
+    // finishedzones
+    {
+      *buf = '\0';
+
+      for (i = 0; i <= top_of_zone_table; i++) {
+        // Skip anything that's not marked as completed.
+        if (!zone_table[i].approved) {
+          continue;
+        }
+
+        // Skip zones that were part of Che's release.
+        switch (zone_table[i].number) {
+          case 0:
+          case 2:
+          case 3:
+          case 5:
+          case 6:
+          case 7:
+          case 10:
+          case 11:
+          case 12:
+          case 13:
+          case 14:
+          case 15:
+          case 16:
+          case 18:
+          case 20:
+          case 21:
+          case 22:
+          case 23:
+          case 24:
+          case 25:
+          case 26:
+          case 27:
+          case 29:
+          case 30:
+          case 31:
+          case 32:
+          case 33:
+          case 34:
+          case 35:
+          case 36:
+          case 37:
+          case 38:
+          case 40:
+          case 41:
+          case 42:
+          case 46:
+          case 47:
+          case 48:
+          case 49:
+          case 50:
+          case 51:
+          case 52:
+          case 54:
+          case 55:
+          case 56:
+          case 57:
+          case 58:
+          case 59:
+          case 60:
+          case 61:
+          case 62:
+          case 64:
+          case 65:
+          case 67:
+          case 69:
+          case 70:
+          case 72:
+          case 74:
+          case 77:
+          case 78:
+          case 79:
+          case 80:
+          case 81:
+          case 83:
+          case 84:
+          case 88:
+          case 91:
+          case 95:
+          case 96:
+          case 98:
+          case 99:
+          case 100:
+          case 101:
+          case 102:
+          case 103:
+          case 105:
+          case 106:
+          case 108:
+          case 112:
+          case 113:
+          case 114:
+          case 115:
+          case 120:
+          case 123:
+          case 124:
+          case 125:
+          case 127:
+          case 128:
+          case 130:
+          case 134:
+          case 143:
+          case 145:
+          case 146:
+          case 148:
+          case 150:
+          case 151:
+          case 156:
+          case 157:
+          case 158:
+          case 160:
+          case 162:
+          case 164:
+          case 171:
+          case 172:
+          case 175:
+          case 176:
+          case 179:
+          case 181:
+          case 183:
+          case 184:
+          case 188:
+          case 194:
+          case 196:
+          case 197:
+          case 198:
+          case 203:
+          case 206:
+          case 208:
+          case 210:
+          case 217:
+          case 219:
+          case 220:
+          case 221:
+          case 222:
+          case 224:
+          case 226:
+          case 228:
+          case 229:
+          case 231:
+          case 232:
+          case 233:
+          case 235:
+          case 236:
+          case 237:
+          case 241:
+          case 243:
+          case 245:
+          case 248:
+          case 249:
+          case 250:
+          case 253:
+          case 254:
+          case 261:
+          case 262:
+          case 264:
+          case 267:
+          case 268:
+          case 269:
+          case 274:
+          case 276:
+          case 278:
+          case 279:
+          case 280:
+          case 284:
+          case 286:
+          case 287:
+          case 288:
+          case 289:
+          case 290:
+          case 291:
+          case 293:
+          case 294:
+          case 297:
+          case 298:
+          case 299:
+          case 301:
+          case 302:
+          case 305:
+          case 309:
+          case 310:
+          case 311:
+          case 312:
+          case 315:
+          case 316:
+          case 317:
+          case 318:
+          case 320:
+          case 321:
+          case 322:
+          case 323:
+          case 325:
+          case 328:
+          case 329:
+          case 330:
+          case 332:
+          case 333:
+          case 350:
+          case 352:
+          case 353:
+          case 355:
+          case 357:
+          case 360:
+          case 375:
+          case 380:
+          case 382:
+          case 384:
+          case 392:
+          case 394:
+          case 396:
+          case 398:
+          case 400:
+          case 402:
+          case 403:
+          case 404:
+          case 405:
+          case 406:
+          case 407:
+          case 408:
+          case 410:
+          case 411:
+          case 420:
+          case 421:
+          case 450:
+          case 452:
+          case 500:
+          case 503:
+          case 600:
+          case 602:
+          case 603:
+          case 605:
+          case 607:
+          case 608:
+          case 610:
+          case 615:
+          case 620:
+          case 621:
+          case 622:
+          case 623:
+          case 624:
+          case 625:
+          case 649:
+          case 650:
+          case 651:
+          case 652:
+          case 654:
+          case 700:
+          case 701:
+          case 702:
+          case 703:
+          case 704:
+          case 705:
+          case 710:
+          case 711:
+          case 720:
+          case 721:
+          case 807:
+          case 850:
+          case 852:
+          case 854:
+          case 856:
+          case 858:
+          case 859:
+          case 860:
+          case 1000:
+          case 7000:
+          case 7050:
+          case 7060:
+            continue;
+        }
+
+        print_zone_to_buf(ENDOF(buf), sizeof(buf) - strlen(buf), i, 2, ch);
+      }
+    }
+    page_string(ch->desc, buf, 1);
     return;
   default:
     send_to_char("Sorry, I don't understand that.\r\n", ch);
@@ -5460,7 +5781,8 @@ ACMD(do_set)
                { "sitehidden",  LVL_PRESIDENT, PC, BINARY },
                { "lifestyle",  LVL_PRESIDENT, PC, MISC },
                { "highestindex", LVL_ADMIN, BOTH, NUMBER },
-               { "strikes", LVL_FIXER, PC, NUMBER }, // 89
+               { "strikes", LVL_FIXER, PC, NUMBER },
+               { "scrutiny", LVL_ADMIN, PC, BINARY }, // 90
                { "\n", 0, BOTH, MISC }
              };
 
@@ -5594,7 +5916,10 @@ ACMD(do_set)
     SET_OR_REMOVE(PLR_FLAGS(vict), PLR_INVSTART);
     break;
   case 2:
-    set_title(vict, val_arg);
+#ifdef IS_BUILDPORT
+    FAILURE_CASE(!access_level(ch, LVL_ADMIN), "Titles are disabled on the buildport.");
+#endif
+    set_title(vict, val_arg, TRUE);
     snprintf(buf, sizeof(buf), "%s's title is now: %s", GET_NAME(vict), GET_TITLE(vict));
     break;
   case 3:
@@ -5942,9 +6267,15 @@ ACMD(do_set)
     SET_OR_REMOVE(PLR_FLAGS(vict), PLR_NOSTAT);
     break;
   case 51:
+#ifdef IS_BUILDPORT
+    FAILURE_CASE(!access_level(ch, LVL_ADMIN), "Titles are disabled on the buildport.");
+#endif
     set_pretitle(vict, val_arg);
     break;
   case 52:
+#ifdef IS_BUILDPORT
+    FAILURE_CASE(!access_level(ch, LVL_ADMIN), "Titles are disabled on the buildport.");
+#endif
     if (strstr((const char *)val_arg, "^")) {
       send_to_char("Whotitles can't contain the ^^ character.\r\n", ch);
       SET_CLEANUP(false);
@@ -6173,6 +6504,10 @@ ACMD(do_set)
       GET_SETTABLE_AUTOMOD_COUNTER(vict) = value;
       mudlog_vfprintf(ch, LOG_WIZLOG, "%s changed %s's auto-moderator strikes from %d to %d.", GET_CHAR_NAME(ch), GET_NAME(vict), old_val, value);
     }
+    break;
+  case 90: /* suspicious flag */
+    SET_OR_REMOVE(PLR_FLAGS(vict), PLR_ADDITIONAL_SCRUTINY);
+    mudlog_vfprintf(ch, LOG_WIZLOG, "%s changed %s's staff-scrutiny flag setting to %s.", GET_CHAR_NAME(ch), GET_NAME(vict), PLR_FLAGGED(vict, PLR_ADDITIONAL_SCRUTINY) ? "TRUE" : "FALSE");
     break;
   default:
     snprintf(buf, sizeof(buf), "Can't set that!");
@@ -7042,7 +7377,7 @@ ACMD(do_slist)
 
     snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "%5d. [%8ld] %s %s (%ld)\r\n", ++found,
             shop_table[nr].vnum,
-            vnum_from_non_connected_zone(shop_table[nr].keeper) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+            vnum_from_non_approved_zone(shop_table[nr].keeper) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
             (real_mob = real_mobile(shop_table[nr].keeper)) < 0 ? "None" : GET_NAME(&mob_proto[real_mob]),
             shop_table[nr].keeper);
   }
@@ -7175,12 +7510,13 @@ bool restring_with_args(struct char_data *ch, char *argument, bool using_sysp) {
   FALSE_CASE(GET_OBJ_TYPE(obj) == ITEM_GUN_ACCESSORY && GET_ACCESSORY_TYPE(obj) != ACCESS_SMARTGOGGLE, "Sorry, gun attachments can't be restrung.");
   FALSE_CASE(GET_OBJ_TYPE(obj) == ITEM_MOD || GET_OBJ_TYPE(obj) == ITEM_GUN_AMMO, "Sorry, vehicle mods and ammo containers can't be restrung.");
   FALSE_CASE(GET_OBJ_TYPE(obj) == ITEM_CLIMBING && GET_OBJ_VAL(obj, 1) == CLIMBING_TYPE_WATER_WINGS, "No amount of cosmetic changes could hide the garishness of water wings.");
+  FALSE_CASE_PRINTF(GET_OBJ_TYPE(obj) == ITEM_PET, "%s gives you an offended look and refuses to cooperate.", CAP(GET_OBJ_NAME(obj)));
   FALSE_CASE(GET_OBJ_VNUM(obj) == OBJ_EYEBALL_KEY, "You're pretty sure that trying to alter the eyeball would ruin it.");
   FALSE_CASE(GET_OBJ_TYPE(obj) == ITEM_VEHCONTAINER, "Sorry, vehicle containers can't be restrung.");
   FALSE_CASE(obj_is_a_vehicle_title(obj), "Vehicle titles are consumable, so they can't be restrung.");
 
   // Ensure we don't contain any forbidden phrases. Error messages are shown in-function.
-  if (check_for_banned_content(buf, ch)) {
+  if (check_for_banned_content(buf, ch, MODERATION_MODE_DESCRIPTIONS)) {
     return FALSE;
   }
 
@@ -7328,7 +7664,7 @@ ACMD(do_incognito)
   if (GET_INCOG_LEV(ch) == 0)
     send_to_char("You are no longer incognito on the wholist.\r\n", ch);
   else
-    send_to_char(ch, "Your wholist incognito is level %d.\r\n", i);
+    send_to_char(ch, "Your wholist incognito is level %d.\r\n", GET_INCOG_LEV(ch));
 }
 
 ACMD(do_zone) {
@@ -7720,7 +8056,7 @@ int audit_zone_rooms_(struct char_data *ch, int zone_num, bool verbose) {
 
     snprintf(buf, sizeof(buf), "^c[%8ld]^n %s %s^n:\r\n",
              room->number,
-             vnum_from_non_connected_zone(room->number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+             vnum_from_non_approved_zone(room->number) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
              room->name);
 
     // Check its strings.
@@ -8015,7 +8351,7 @@ int audit_zone_mobs_(struct char_data *ch, int zone_num, bool verbose) {
 
     snprintf(buf, sizeof(buf), "^c[%8ld]^n %s %s^n:\r\n",
              GET_MOB_VNUM(mob),
-             vnum_from_non_connected_zone(GET_MOB_VNUM(mob)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+             vnum_from_non_approved_zone(GET_MOB_VNUM(mob)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
              GET_CHAR_NAME(mob));
 
     // Flag mobs with crazy stats
@@ -8196,7 +8532,7 @@ int audit_zone_mobs_(struct char_data *ch, int zone_num, bool verbose) {
               rnum_t obj_rnum = real_object(vnum);
 
               snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "  - is equipped with %sexternal non-canon-zone item %ld (%s).\r\n", // *immature giggle*
-                       vnum_from_non_connected_zone(vnum) ? "^ynon-connected^n " : "",
+                       vnum_from_non_approved_zone(vnum) ? "^ynon-approved^n " : "",
                        vnum,
                        obj_rnum >= 0 ? GET_OBJ_NAME(&obj_proto[obj_rnum]) : "(does not exist)");
             }
@@ -8254,7 +8590,7 @@ int audit_zone_objects_(struct char_data *ch, int zone_num, bool verbose) {
 
     snprintf(buf, sizeof(buf), "^c[%8ld]^n %s %s^n:\r\n",
              GET_OBJ_VNUM(obj),
-             vnum_from_non_connected_zone(GET_OBJ_VNUM(obj)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+             vnum_from_non_approved_zone(GET_OBJ_VNUM(obj)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
              GET_OBJ_NAME(obj));
 
     // Flag objects with odd typing
@@ -9254,7 +9590,7 @@ int audit_zone_commands_(struct char_data *ch, int zone_num, bool verbose) {
 #define AUDIT_ALL_ZONES(func_suffix)                           \
 if (!str_cmp(arg1, #func_suffix)) {                            \
   for (zonenum = 0; zonenum <= top_of_zone_table; zonenum++) { \
-    if (!zone_table[zonenum].connected                         \
+    if (!zone_table[zonenum].approved                          \
         || zone_table[zonenum].number == 0                     \
         || zone_table[zonenum].number == 10                    \
         || zone_table[zonenum].number == 100)                  \
@@ -9409,7 +9745,7 @@ void calculate_zone_payout(struct char_data *ch, rnum_t zone_rnum) {
             && EXIT2(room, dir)->to_room
             && (seen_zone = get_zone_from_vnum(GET_ROOM_VNUM(EXIT2(room, dir)->to_room)))
             && seen_zone != &zone_table[zone_rnum]
-            && seen_zone->connected)
+            && seen_zone->approved)
         {
           // We know this room is connected. Add all its exits etc to our map.
           reward_value += spider_connected_rooms_for_reward_func(room, connected_rooms, connected_hosts, connected_ics);
@@ -9802,7 +10138,7 @@ ACMD(do_makenerps) {
 
   if (is_abbrev(buf, "cyberware")) {
     ware = read_object(OBJ_CUSTOM_NERPS_CYBERWARE, VIRTUAL, OBJ_LOAD_REASON_WIZLOAD);
-    GET_CYBERWARE_ESSENCE_COST(ware) = (int) (essence_cost * 100);
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(ware) = (int) (essence_cost * 100);
 
     if (is_visible)
       SET_BIT(GET_CYBERWARE_FLAGS(ware), NERPS_WARE_VISIBLE);
@@ -9865,7 +10201,7 @@ int _check_for_zone_error(vnum_t vnum, int zone_num, char *buf, size_t buf_len, 
     snprintf(ENDOF(buf), buf_len - strlen(buf), "  - %s %ld from %sexternal zone.\r\n",
              error_type,
              vnum,
-             vnum_from_non_connected_zone(vnum) ? "^ynon-connected^n " : ""
+             vnum_from_non_approved_zone(vnum) ? "^ynon-approved^n " : ""
             );
     return 1;
   }

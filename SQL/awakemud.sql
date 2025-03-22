@@ -82,8 +82,20 @@ CREATE TABLE `pfiles` (
   `email` varchar(200),
   `multiplier` smallint(5) unsigned default 100,
   `lifestyle_string` varchar(200) default 'The metallic scent of the Neophyte Guild clings to $m.',
+  `exdesc_max` smallint(5) unsigned default 0,
+  `otaku_path` tinyint(2) default 0,
+  `submersion_grade` smallint(3),
   PRIMARY KEY (`idnum`),
   KEY (`name`)
+);
+
+CREATE TABLE `pfiles_exdescs` (
+  `idnum` mediumint(5) unsigned NOT NULL,
+  `keyword` varchar(100) NOT NULL,
+  `name` varchar(200) NOT NULL,
+  `desc` text NOT NULL,
+  `wearslots` varchar(100) NOT NULL,
+  PRIMARY KEY (`idnum`, `keyword`)
 );
 
 CREATE TABLE `pfiles_immortdata` (
@@ -106,6 +118,7 @@ CREATE TABLE `pfiles_chargendata` (
   `archetypal` tinyint(2) unsigned default '0',
   `archetype` tinyint(2) unsigned default '0',
   `prestige_alt` bigint unsigned default '0' not null,
+  `channel_points` tinyint(2) unsigned default '0',
   PRIMARY KEY (`idnum`)
 );
 
@@ -161,6 +174,13 @@ CREATE TABLE `pfiles_adeptpowers` (
 CREATE TABLE `pfiles_metamagic` (
   `idnum` mediumint(5) unsigned default '0',
   `metamagicnum` smallint(3) unsigned default '0',
+  `rank` smallint(3) unsigned default '0',
+  KEY(`idnum`)
+);
+
+CREATE TABLE `pfiles_echoes` (
+  `idnum` mediumint(5) unsigned default '0',
+  `echonum` smallint(3) unsigned default '0',
   `rank` smallint(3) unsigned default '0',
   KEY(`idnum`)
 );

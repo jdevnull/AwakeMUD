@@ -93,6 +93,8 @@ ACMD(do_decorate) {
   FAILURE_CASE(!ch->in_room || !GET_APARTMENT(ch->in_room), "You must be in an apartment or vehicle to decorate it.");
   FAILURE_CASE(!GET_APARTMENT(ch->in_room)->has_owner_privs(ch), "You must be the owner of this apartment to decorate it.")
   FAILURE_CASE(!GET_APARTMENT_SUBROOM(ch->in_room), "This apartment is bugged! Notify staff.");
+  FAILURE_CASE(GET_APARTMENT(ch->in_room)->get_lifestyle() <= LIFESTYLE_SQUATTER && (GET_ROOM_VNUM(ch->in_room) < 6900 || GET_ROOM_VNUM(ch->in_room) > 6999),
+               "Squats can't be redecorated.");
   
   // If they've specified an argument, use that to set the room's name.
   skip_spaces(&argument);
@@ -101,7 +103,7 @@ ACMD(do_decorate) {
                         "You must specify a title of %d characters or fewer.", MAX_ROOM_DECORATION_NAME_LEN);
     
     // No offensive room names.
-    if (check_for_banned_content(argument, ch))
+    if (check_for_banned_content(argument, ch, MODERATION_MODE_DESCRIPTIONS))
       return;
 
     GET_APARTMENT_SUBROOM(ch->in_room)->set_decorated_name(argument);

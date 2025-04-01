@@ -240,7 +240,8 @@ void price_cyber(struct obj_data *obj);
 void price_bio(struct obj_data *obj);
 extern void verify_db_password_column_size();
 void set_elemental_races();
-void initialize_and_alphabetize_room_flags();
+void initialize_and_alphabetize_flag_maps();
+void set_up_pet_dummy_mob();
 
 /* external vars */
 extern int no_specials;
@@ -302,7 +303,7 @@ void initialize_and_connect_to_mysql() {
   mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
 
   // Perform the actual connection.
-  if (!mysql_real_connect(mysql, mysql_host, mysql_user, mysql_password, mysql_db, 0, NULL, 0)) {
+  if (!mysql_real_connect(mysql, mysql_host, mysql_user, mysql_password, mysql_db, GAME_MYSQL_PORT, NULL, 0)) {
     snprintf(buf, sizeof(buf), "FATAL ERROR: %s\r\n", mysql_error(mysql));
     log(buf);
     log("Suggestion: Make sure your DB is running and that you've specified your connection info in src/mysql_config.cpp.\r\n");
@@ -364,9 +365,10 @@ void require_that_sql_table_exists(const char *table_name, const char *migration
   mysql_wrapper(mysql, query_buf);
 
   if (!(res = mysql_use_result(mysql))) {
-    log_vfprintf("ERROR: You need to run the %s migration from the SQL directory. "
-                 "Probable syntax from your AwakeMUD directory: `mysql -u YOUR_USERNAME -p AwakeMUD < %s`.",
+    log_vfprintf("ERROR: You need to run a migration to add the %s table. "
+                 "Probable syntax from your AwakeMUD directory: `mysql -u YOUR_USERNAME -p %s < %s`.",
                  table_name,
+                 mysql_db,
                  migration_path_from_root_directory);
     exit(ERROR_DB_TABLE_REQUIRED);
   }
@@ -377,9 +379,10 @@ void require_that_sql_table_exists(const char *table_name, const char *migration
   mysql_free_result(res);
 
   if (!have_table) {
-    log_vfprintf("ERROR: You need to run the %s migration from the SQL directory. "
-                 "Probable syntax from your AwakeMUD directory: `mysql -u YOUR_USERNAME -p AwakeMUD < %s`.",
+    log_vfprintf("ERROR: You need to run a migration to add the %s table. "
+                 "Probable syntax from your AwakeMUD directory: `mysql -u YOUR_USERNAME -p %s < %s`.",
                  table_name,
+                 mysql_db,
                  migration_path_from_root_directory);
     exit(ERROR_DB_TABLE_REQUIRED);
   }
@@ -396,9 +399,11 @@ void require_that_field_meets_constraints(const char *field_name, const char *ta
   char query_buf[1000];
 
   snprintf(migration_string, sizeof(migration_string),
-           "ERROR: You need to run the %s migration from the SQL directory. "
-           "Probable syntax from your AwakeMUD directory: `mysql -u YOUR_USERNAME -p AwakeMUD < %s`.",
+           "ERROR: You need to run a migration to add or modify %s.%s. "
+           "Probable syntax from your AwakeMUD directory: `mysql -u YOUR_USERNAME -p %s < %s`.",
            table_name,
+           field_name,
+           mysql_db,
            migration_path_from_root_directory);
 
   snprintf(query_buf, sizeof(query_buf), "SHOW COLUMNS FROM %s LIKE '%s';",
@@ -613,6 +618,8 @@ void boot_world(void)
   require_that_field_exists_in_table("Value14", "pfiles_inv", "SQL/Migrations/obj_idnums_and_vals.sql");
   require_that_sql_table_exists("pfiles_factions", "SQL/Migrations/add_factions.sql");
   require_that_sql_table_exists("pfiles_exdescs", "SQL/Migrations/add_exdescs.sql");
+  require_that_field_exists_in_table("otaku_path", "pfiles", "SQL/Migrations/add_otaku.sql");
+  require_that_sql_table_exists("pfiles_echoes", "SQL/Migrations/add_otaku_echoes.sql");
 
   {
     const char *object_tables[4] = {
@@ -729,7 +736,8 @@ void DBInit()
   log("Booting world.");
   boot_world();
   initialize_traffic_msgs();
-  initialize_and_alphabetize_room_flags();
+  initialize_and_alphabetize_flag_maps();
+  set_up_pet_dummy_mob();
 
   log("Loading social messages.");
   boot_social_messages();
@@ -2325,73 +2333,83 @@ void parse_object(File &fl, long nr)
         obj->text.look_desc = str_dup("A hefty box of ammunition, banded in metal and secured with flip-down hasps for transportation and storage.");
         break;
       case ITEM_WEAPON:
-        // Attempt to automatically rectify broken weapons.
-        bool is_melee = FALSE;
-        if (GET_WEAPON_ATTACK_TYPE(obj) > MAX_WEAP)
-          switch (GET_WEAPON_SKILL(obj)) {
-            case SKILL_EDGED_WEAPONS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_EDGED;
-              is_melee = TRUE;
-              break;
-            case SKILL_POLE_ARMS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_POLEARM;
-              is_melee = TRUE;
-              break;
-            case SKILL_WHIPS_FLAILS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_WHIP;
-              is_melee = TRUE;
-              break;
-            case SKILL_CLUBS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_CLUB;
-              is_melee = TRUE;
-              break;
-            case SKILL_UNARMED_COMBAT:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_GLOVE;
-              is_melee = TRUE;
-              break;
-            case SKILL_PISTOLS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_HEAVY_PISTOL;
-              break;
-            case SKILL_RIFLES:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_SPORT_RIFLE;
-              break;
-            case SKILL_SHOTGUNS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_SHOTGUN;
-              break;
-            case SKILL_ASSAULT_RIFLES:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_ASSAULT_RIFLE;
-              break;
-            case SKILL_SMG:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_SMG;
-              break;
-            case SKILL_GRENADE_LAUNCHERS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_GREN_LAUNCHER;
-              break;
-            case SKILL_MISSILE_LAUNCHERS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_MISS_LAUNCHER;
-              break;
-            case SKILL_TASERS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_TASER;
-              break;
-            case SKILL_MACHINE_GUNS:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_LMG;
-              break;
-            case SKILL_ASSAULT_CANNON:
-              GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_CANNON;
-              break;
+        {
+          // Attempt to automatically rectify broken weapons.
+          bool is_melee = FALSE;
+          if (GET_WEAPON_ATTACK_TYPE(obj) > MAX_WEAP)
+            switch (GET_WEAPON_SKILL(obj)) {
+              case SKILL_EDGED_WEAPONS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_EDGED;
+                is_melee = TRUE;
+                break;
+              case SKILL_POLE_ARMS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_POLEARM;
+                is_melee = TRUE;
+                break;
+              case SKILL_WHIPS_FLAILS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_WHIP;
+                is_melee = TRUE;
+                break;
+              case SKILL_CLUBS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_CLUB;
+                is_melee = TRUE;
+                break;
+              case SKILL_UNARMED_COMBAT:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_GLOVE;
+                is_melee = TRUE;
+                break;
+              case SKILL_PISTOLS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_HEAVY_PISTOL;
+                break;
+              case SKILL_RIFLES:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_SPORT_RIFLE;
+                break;
+              case SKILL_SHOTGUNS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_SHOTGUN;
+                break;
+              case SKILL_ASSAULT_RIFLES:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_ASSAULT_RIFLE;
+                break;
+              case SKILL_SMG:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_SMG;
+                break;
+              case SKILL_GRENADE_LAUNCHERS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_GREN_LAUNCHER;
+                break;
+              case SKILL_MISSILE_LAUNCHERS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_MISS_LAUNCHER;
+                break;
+              case SKILL_TASERS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_TASER;
+                break;
+              case SKILL_MACHINE_GUNS:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_LMG;
+                break;
+              case SKILL_ASSAULT_CANNON:
+                GET_WEAPON_ATTACK_TYPE_SETTABLE(obj) = WEAP_CANNON;
+                break;
+            }
+
+          if (GET_WEAPON_SKILL(obj) > 100) {
+            log_vfprintf("WARNING: get_weapon_skill for %s is %d. Prior logic would have made it %d.",
+                        GET_OBJ_NAME(obj),
+                        GET_WEAPON_SKILL(obj),
+                        GET_WEAPON_SKILL(obj) - 100);
+            // GET_WEAPON_SKILL(obj) -= 100;
           }
 
-        if (GET_WEAPON_SKILL(obj) > 100) {
-          log_vfprintf("WARNING: get_weapon_skill for %s is %d. Prior logic would have made it %d.",
-                       GET_OBJ_NAME(obj),
-                       GET_WEAPON_SKILL(obj),
-                       GET_WEAPON_SKILL(obj) - 100);
-          // GET_WEAPON_SKILL(obj) -= 100;
+          if (is_melee)
+            GET_WEAPON_REACH(obj) = MAX(0, GET_WEAPON_REACH(obj));
         }
-
-        if (is_melee)
-          GET_WEAPON_REACH(obj) = MAX(0, GET_WEAPON_REACH(obj));
-
+        break;
+      case ITEM_DECK_ACCESSORY:
+        // Fix laptops.
+        if (GET_DECK_ACCESSORY_TYPE(obj) == TYPE_COMPUTER) {
+          if (GET_DECK_ACCESSORY_COMPUTER_USED_MEMORY(obj) > 0) {
+            GET_DECK_ACCESSORY_COMPUTER_USED_MEMORY(obj) = 0;
+            GET_DECK_ACCESSORY_COMPUTER_IS_LAPTOP(obj) = 1;
+          }
+        }
         break;
     }
   } // End per-type modifications.
@@ -2745,31 +2763,46 @@ void load_zones(File &fl)
   Z.name = str_dup(buf);
 
   fl.GetLine(buf, 256, FALSE);
-  // Attempt to read background count from the line.
-  if (sscanf(buf, " %d %d %d %d %d %d %d %d %d %d",
+  // Attempt to read our new dual-mode locks from the line.
+  if (sscanf(buf, " %d %d %d %d %d %d %d %d %d %d %d",
              &Z.top, &Z.lifespan, &Z.reset_mode,
-             &Z.security, &Z.connected, &Z.jurisdiction, &Z.is_pghq, &Z.locked_to_non_editors,
-             &Z.default_aura_type, &Z.default_aura_force) < 10)
+             &Z.security, &Z.editing_restricted_to_admin, &Z.approved, &Z.jurisdiction, &Z.is_pghq, &Z.locked_to_non_editors,
+             &Z.default_aura_type, &Z.default_aura_force) < 11)
   {
-    // Attempt to read the locked flag from the line.
-    if (sscanf(buf, " %d %d %d %d %d %d %d %d",
+    // Attempt to read background count from the line.
+    if (sscanf(buf, " %d %d %d %d %d %d %d %d %d %d",
               &Z.top, &Z.lifespan, &Z.reset_mode,
-              &Z.security, &Z.connected, &Z.jurisdiction, &Z.is_pghq, &Z.locked_to_non_editors) < 8)
+              &Z.security, &Z.old_connected_value, &Z.jurisdiction, &Z.is_pghq, &Z.locked_to_non_editors,
+              &Z.default_aura_type, &Z.default_aura_force) < 10)
     {
-      // Attempt to read the new PGHQ flag from the line.
-      if (sscanf(buf, " %d %d %d %d %d %d %d",
+      // Attempt to read the locked flag from the line.
+      if (sscanf(buf, " %d %d %d %d %d %d %d %d",
                 &Z.top, &Z.lifespan, &Z.reset_mode,
-                &Z.security, &Z.connected, &Z.jurisdiction, &Z.is_pghq) < 7)
+                &Z.security, &Z.old_connected_value, &Z.jurisdiction, &Z.is_pghq, &Z.locked_to_non_editors) < 8)
       {
-        // Fallback: Instead, read out the old format. Assume we'll save PGHQ data later.
-        if (sscanf(buf, " %d %d %d %d %d %d",
+        // Attempt to read the new PGHQ flag from the line.
+        if (sscanf(buf, " %d %d %d %d %d %d %d",
                   &Z.top, &Z.lifespan, &Z.reset_mode,
-                  &Z.security, &Z.connected, &Z.jurisdiction) < 5) {
-          fprintf(stderr, "FATAL ERROR: Format error in 6-constant line of %s: Expected six numbers like ' # # # # # #'.", fl.Filename());
-          exit(ERROR_WORLD_BOOT_FORMAT_ERROR);
+                  &Z.security, &Z.old_connected_value, &Z.jurisdiction, &Z.is_pghq) < 7)
+        {
+          // Fallback: Instead, read out the old format. Assume we'll save PGHQ data later.
+          if (sscanf(buf, " %d %d %d %d %d %d",
+                    &Z.top, &Z.lifespan, &Z.reset_mode,
+                    &Z.security, &Z.old_connected_value, &Z.jurisdiction) < 5) {
+            fprintf(stderr, "FATAL ERROR: Format error in 6-constant line of %s: Expected six numbers like ' # # # # # #'.", fl.Filename());
+            exit(ERROR_WORLD_BOOT_FORMAT_ERROR);
+          }
+          // Failed to read this, so assume it's 0.
+          Z.is_pghq = 0;
         }
+        // Failed to read this, so assume it's 0.
+        Z.locked_to_non_editors = 0;
       }
+      // Failed to read this, so assume it's 0 for both.
+      Z.default_aura_type = Z.default_aura_force = 0;
     }
+    // Since we read into the old connected value, clone it out to the new dual-mode locks.
+    Z.approved = Z.editing_restricted_to_admin = Z.old_connected_value;
   }
 
   fl.GetLine(buf, 256, FALSE);
@@ -2867,8 +2900,13 @@ int vnum_mobile_karma(char *searchname, struct char_data * ch)
       }
       if ( i != 10000 && karma > i )
         continue;
-      if (vnum_from_non_connected_zone(MOB_VNUM_RNUM(nr)))
+      if (vnum_from_non_approved_zone(MOB_VNUM_RNUM(nr))) {
+#ifdef IS_BUILDPORT
+        send_to_char(ch, "Allowing non-approved karma calc since we're on the buildport. This would be skipped otherwise.");
+#else
         continue;
+#endif
+      }
       ++found;
       snprintf(buf, sizeof(buf), "[%5ld] %4.2f (%4.2f) %4dx %6.2f %s\r\n",
               MOB_VNUM_RNUM(nr),
@@ -2906,8 +2944,13 @@ int vnum_mobile_bonuskarma(char *searchname, struct char_data * ch)
       }
       if ( i != 10000 && GET_KARMA(&mob_proto[nr]) > i )
         continue;
-      if (vnum_from_non_connected_zone(MOB_VNUM_RNUM(nr)))
+      if (vnum_from_non_approved_zone(MOB_VNUM_RNUM(nr))) {
+#ifdef IS_BUILDPORT
+        send_to_char(ch, "Allowing non-connected karma calc since we're on the buildport. This would be skipped otherwise.");
+#else
         continue;
+#endif
+      }
       karma = calc_karma(NULL, &mob_proto[nr]);
       ++found;
       snprintf(buf, sizeof(buf), "[%5ld] %4.2f (%4.2f)%4dx %6.2f %s\r\n",
@@ -2948,7 +2991,13 @@ int vnum_mobile_nuyen(char *searchname, struct char_data * ch)
       }
       if ( i != 1000*1000*1000 && nuyen > i )
         continue;
-      if (vnum_from_non_connected_zone(MOB_VNUM_RNUM(nr)))
+      if (vnum_from_non_approved_zone(MOB_VNUM_RNUM(nr))) {
+#ifdef IS_BUILDPORT
+        send_to_char(ch, "Allowing non-approved nuyen calc since we're on the buildport. This would be skipped otherwise.");
+#else
+        continue;
+#endif
+      }
         continue;
       karma = calc_karma(NULL, &mob_proto[nr]);
       ++found;
@@ -3100,6 +3149,37 @@ int vnum_mobile_affflag(int i, struct char_data * ch)
       send_to_char(buf, ch);
       found++;
     }
+  return (found);
+}
+
+int vnum_mobile_attribute(char *attrname, struct char_data *ch) {
+  int found = 0;
+
+  // Identify the flag.
+  int attr = search_block(attrname, attributes, FALSE);
+
+  if (attr >= NUM_ATTRIBUTES || attr < 0) {
+    send_to_char(ch, "'%s' is not a valid attribute. Choices are:\r\n", attributes);
+    for (attr = 0; attr < NUM_ATTRIBUTES; attr++) {
+      send_to_char(ch, "%s%s%s", attr == 0 ? "" : ", ", attributes[attr], attr == NUM_ATTRIBUTES - 1 ? "\r\n" : "");
+    }
+    return 0;
+  }
+
+  send_to_char(ch, "Mobs sorted by %s:\r\n", attributes[attr]);
+
+  for (int current = 50; current > 0; current--) {
+    for (rnum_t nr = 0; nr <= top_of_mobt; nr++) {
+      if (GET_ATT(&mob_proto[nr], attr) == current || (current == 50 && GET_ATT(&mob_proto[nr], attr) > current)) {
+        send_to_char(ch, "[%5ld] %s^n: %d\r\n",
+                     MOB_VNUM_RNUM(nr),
+                     mob_proto[nr].player.physical_text.name,
+                     GET_ATT(&mob_proto[nr], attr));
+        found++;
+      }
+    }
+  }
+  
   return (found);
 }
 
@@ -3459,6 +3539,8 @@ int vnum_mobile(char *searchname, struct char_data * ch)
     return vnum_mobile_valuedeath(searchname,ch);
   if (!strcmp(arg1,"affflag"))
     return vnum_mobile_affflag(atoi(arg2),ch);
+  if (!strcmp(arg1,"attribute"))
+    return vnum_mobile_attribute(searchname,ch);
   for (nr = 0; nr <= top_of_mobt; nr++)
   {
     bool is_keyword = isname(searchname, get_string_after_color_code_removal(mob_proto[nr].player.physical_text.keywords, NULL));
@@ -3506,7 +3588,7 @@ int vnum_object_weapons(char *searchname, struct char_data * ch)
             continue;
           if (IS_OBJ_STAT(&obj_proto[nr], ITEM_EXTRA_STAFF_ONLY))
             continue;
-          if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+          if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
             continue;
 
           ++found;
@@ -3549,7 +3631,7 @@ int vnum_object_weapons_broken(char *searchname, struct char_data * ch)
       snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "[%6ld :%3d] %s '%s^n'  %s\r\n",
               OBJ_VNUM_RNUM(nr),
               ObjList.CountObj(nr),
-              vnum_from_non_connected_zone(GET_OBJ_VNUM(&obj_proto[nr])) ? " " : "*",
+              vnum_from_non_approved_zone(GET_OBJ_VNUM(&obj_proto[nr])) ? " " : "*",
               GET_OBJ_NAME(&obj_proto[nr]),
               bad_attack_type ? "(bad attack type)" : "");
     }
@@ -3578,7 +3660,7 @@ int vnum_object_weapons_fa_pro(char *searchname, struct char_data * ch)
         continue;
       if (IS_OBJ_STAT(&obj_proto[nr], ITEM_EXTRA_STAFF_ONLY))
         continue;
-      if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+      if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
         continue;
       if (!WEAPON_CAN_USE_FIREMODE(&obj_proto[nr], MODE_FA))
         continue;
@@ -3632,7 +3714,7 @@ int vnum_object_weapons_by_type(char *searchname, struct char_data * ch)
             continue;
           if (IS_OBJ_STAT(weapon, ITEM_EXTRA_STAFF_ONLY))
             continue;
-          if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+          if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
             continue;
 
           found++;
@@ -3772,7 +3854,7 @@ int vnum_object_magazines(char *searchname, struct char_data * ch)
           continue;
         if (IS_OBJ_STAT(&obj_proto[nr], ITEM_EXTRA_STAFF_ONLY))
           continue;
-        if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+        if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
           continue;
 
         ++found;
@@ -3809,7 +3891,7 @@ int vnum_object_foci(char *searchname, struct char_data * ch)
         if ((power == 10 ? GET_FOCUS_FORCE(&obj_proto[nr]) < power : GET_FOCUS_FORCE(&obj_proto[nr]) != power))
           continue;
 
-        if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+        if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
           continue;
 
         int count = ObjList.CountObj(nr);
@@ -3849,7 +3931,7 @@ int vnum_object_type(int type, struct char_data * ch)
       snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "[%5ld -%2d] %s %s^n%s\r\n",
               OBJ_VNUM_RNUM(nr),
               ObjList.CountObj(nr),
-              vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+              vnum_from_non_approved_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
               obj_proto[nr].text.name,
               obj_proto[nr].source_info ? "  ^g(canon)^n" : "");
     }
@@ -3868,7 +3950,7 @@ int vnum_object_affectloc(int type, struct char_data * ch)
     {
       if (IS_OBJ_STAT(&obj_proto[nr], ITEM_EXTRA_STAFF_ONLY))
         continue;
-      if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+      if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
         continue;
 
       for (int i = 0; i < MAX_OBJ_AFFECT; i++)
@@ -3904,7 +3986,7 @@ int vnum_object_affects(struct char_data *ch) {
   for (nr = 0; nr <= top_of_objt; nr++) {
     if (IS_OBJ_STAT(&obj_proto[nr], ITEM_EXTRA_STAFF_ONLY))
       continue;
-    if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+    if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
       continue;
 
     // If it can't be used in the first place, skip it.
@@ -3967,7 +4049,7 @@ int vnum_object_poison(struct char_data * ch)
       snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "[%5ld -%2d] %s %s^n  poison rating: %d\r\n",
               OBJ_VNUM_RNUM(nr),
               ObjList.CountObj(nr),
-              vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+              vnum_from_non_approved_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
               obj_proto[nr].text.name,
               GET_FOUNTAIN_POISON_RATING(&obj_proto[nr]));
     }
@@ -3976,7 +4058,7 @@ int vnum_object_poison(struct char_data * ch)
       snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "[%5ld -%2d] %s %s^n  poison rating: %d\r\n",
               OBJ_VNUM_RNUM(nr),
               ObjList.CountObj(nr),
-              vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+              vnum_from_non_approved_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
               obj_proto[nr].text.name,
               GET_DRINKCON_POISON_RATING(&obj_proto[nr]));
     }
@@ -4013,7 +4095,7 @@ int vnum_object_weaponfocus(char *searchname, struct char_data * ch)
             continue;
           if (IS_OBJ_STAT(&obj_proto[nr], ITEM_EXTRA_STAFF_ONLY))
             continue;
-          if (vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)))
+          if (!vnum_from_editing_restricted_zone(OBJ_VNUM_RNUM(nr)))
             continue;
 
           ++found;
@@ -4120,7 +4202,7 @@ int vnum_object(char *searchname, struct char_data * ch)
       snprintf(buf, sizeof(buf), "%3d. [%5ld -%2d] %s %s%s\r\n", ++found,
               OBJ_VNUM_RNUM(nr),
               ObjList.CountObj(nr),
-              vnum_from_non_connected_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(connected)" : "*"),
+              vnum_from_non_approved_zone(OBJ_VNUM_RNUM(nr)) ? " " : (PRF_FLAGGED(ch, PRF_SCREENREADER) ? "(approved)" : "*"),
               obj_proto[nr].text.name,
               obj_proto[nr].source_info ? "  ^g(canon)^n" : "");
       send_to_char(buf, ch);
@@ -4133,12 +4215,12 @@ int vnum_room_samename(struct char_data *ch) {
   int found = 0;
   std::unordered_map<std::string, std::vector<vnum_t>> seen_names = {};
 
-  send_to_char(ch, "Looking for connected rooms that share the same name...\r\n");
+  send_to_char(ch, "Looking for edit-locked rooms that share the same name...\r\n");
 
   for (rnum_t nr = 0; nr <= top_of_world; nr++) {
     struct room_data *room = &world[nr];
 
-    if (vnum_from_non_connected_zone(GET_ROOM_VNUM(room)))
+    if (!vnum_from_editing_restricted_zone(GET_ROOM_VNUM(room)))
       continue;
 
     std::string string_name = GET_ROOM_NAME(room);
@@ -4575,9 +4657,9 @@ void reset_zone(int zone, int reboot)
 {
   SPECIAL(fixer);
   int cmd_no, last_cmd = 0, found = 0, no_mob = 0, temp_qty = 0;
-  static int i;
+  static int i = 0;
   struct char_data *mob = NULL;
-  struct obj_data *obj, *obj_to, *check;
+  struct obj_data *obj = NULL, *obj_to = NULL, *check = NULL;
   struct veh_data *veh = NULL;
 
   for (cmd_no = 0; cmd_no < zone_table[zone].num_cmds; cmd_no++) {
@@ -5796,6 +5878,8 @@ void clear_char(struct char_data * ch)
   GET_WAS_IN(ch) = NULL;
   if (ch->points.max_mental < 1000)
     ch->points.max_mental = 1000;
+  if (ch->points.max_physical < 1000)
+    ch->points.max_physical = 1000;
   ch->player.time.logon = time(0);
 
 #ifdef USE_DEBUG_CANARIES
@@ -6580,7 +6664,7 @@ void price_cyber(struct obj_data *obj)
     case CYB_CHIPJACK:
       GET_OBJ_VAL(obj, 1) = 0;
       GET_OBJ_COST(obj) = 1000 * GET_CYBERWARE_FLAGS(obj);
-      GET_CYBERWARE_ESSENCE_COST(obj) = 15 + (GET_CYBERWARE_FLAGS(obj) * 5);
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 15 + (GET_CYBERWARE_FLAGS(obj) * 5);
       GET_OBJ_AVAILTN(obj) = 3;
       GET_OBJ_AVAILDAY(obj) = 3;
       break;
@@ -6588,17 +6672,17 @@ void price_cyber(struct obj_data *obj)
       GET_OBJ_VAL(obj, 1) = 0;
       if (GET_CYBERWARE_FLAGS(obj) == DATA_STANDARD) {
         GET_OBJ_COST(obj) = 1000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20;
         GET_OBJ_AVAILDAY(obj) = GET_OBJ_AVAILTN(obj) = 0;
       } else {
         GET_OBJ_COST(obj) = 3000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 30;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 30;
         GET_OBJ_AVAILTN(obj) = 5;
         GET_OBJ_AVAILDAY(obj) = 4;
       }
       break;
     case CYB_DATALOCK:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 20;
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20;
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 1.5;
       GET_OBJ_COST(obj) = 1000;
@@ -6626,20 +6710,20 @@ void price_cyber(struct obj_data *obj)
      case CYB_KNOWSOFTLINK:
        GET_OBJ_VAL(obj, 1) = 0;
        GET_OBJ_COST(obj) = 1000;
-       GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+       GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
        GET_OBJ_AVAILTN(obj) = 3;
        GET_OBJ_AVAILDAY(obj) = 1;
        break;
      case CYB_MEMORY:
        GET_OBJ_VAL(obj, 1) = 0;
        GET_OBJ_COST(obj) = GET_OBJ_VAL(obj, 3) * 150;
-       GET_CYBERWARE_ESSENCE_COST(obj) = GET_OBJ_VAL(obj, 3) / 3;
+       GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = GET_OBJ_VAL(obj, 3) / 3;
        GET_OBJ_AVAILTN(obj) = 3;
        GET_OBJ_AVAILDAY(obj) = 1;
        break;
      case CYB_TOOTHCOMPARTMENT:
        GET_OBJ_VAL(obj, 1) = 0;
-       GET_CYBERWARE_ESSENCE_COST(obj) = 0;
+       GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 0;
        GET_OBJ_AVAILDAY(obj) = 2;
        if (!GET_CYBERWARE_FLAGS(obj)) {
          GET_OBJ_COST(obj) = 1500;
@@ -6651,13 +6735,13 @@ void price_cyber(struct obj_data *obj)
        break;
      case CYB_PHONE:
        GET_OBJ_VAL(obj, 1) = 0;
-       GET_CYBERWARE_ESSENCE_COST(obj) = 50;
+       GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 50;
        GET_OBJ_COST(obj) = 3700;
        GET_OBJ_AVAILTN(obj) = 3;
        GET_OBJ_AVAILDAY(obj) = 1;
        break;
      case CYB_RADIO:
-       GET_CYBERWARE_ESSENCE_COST(obj) = 75;
+     GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 75;
        GET_OBJ_COST(obj) = 2000 * GET_OBJ_VAL(obj, 1);
        GET_OBJ_AVAILTN(obj) = 2;
        GET_OBJ_AVAILDAY(obj) = 1;
@@ -6666,35 +6750,35 @@ void price_cyber(struct obj_data *obj)
        switch (GET_CYBERWARE_FLAGS(obj)) {
          case BONE_PLASTIC:
            GET_OBJ_VAL(obj, 1) = 0;
-           GET_CYBERWARE_ESSENCE_COST(obj) = 50;
+           GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 50;
            GET_OBJ_COST(obj) = 7500;
            GET_OBJ_AVAILTN(obj) = 5;
            GET_OBJ_AVAILDAY(obj) = 14;
            break;
          case BONE_ALUMINIUM:
            GET_OBJ_VAL(obj, 1) = 0;
-           GET_CYBERWARE_ESSENCE_COST(obj) = 115;
+           GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 115;
            GET_OBJ_COST(obj) = 25000;
            GET_OBJ_AVAILTN(obj) = 5;
            GET_OBJ_AVAILDAY(obj) = 14;
            break;
          case BONE_TITANIUM:
            GET_OBJ_VAL(obj, 1) = 0;
-           GET_CYBERWARE_ESSENCE_COST(obj) = 225;
+           GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 225;
            GET_OBJ_COST(obj) = 75000;
            GET_OBJ_AVAILTN(obj) = 5;
            GET_OBJ_AVAILDAY(obj) = 14;
            break;
          case BONE_KEVLAR:
            GET_OBJ_VAL(obj, 1) = 0;
-           GET_CYBERWARE_ESSENCE_COST(obj) = 100;
+           GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 100;
            GET_OBJ_COST(obj) = 20000;
            GET_OBJ_AVAILTN(obj) = 6;
            GET_OBJ_AVAILDAY(obj) = 21;
            break;
          case BONE_CERAMIC:
            GET_OBJ_VAL(obj, 1) = 0;
-           GET_CYBERWARE_ESSENCE_COST(obj) = 150;
+           GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 150;
            GET_OBJ_COST(obj) = 40000;
            GET_OBJ_AVAILTN(obj) = 6;
            GET_OBJ_AVAILDAY(obj) = 21;
@@ -6703,7 +6787,7 @@ void price_cyber(struct obj_data *obj)
        break;
     case CYB_FINGERTIP:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
       GET_OBJ_COST(obj) = 3000;
       GET_OBJ_AVAILTN(obj) = 3;
       GET_OBJ_AVAILDAY(obj) = 1;
@@ -6711,11 +6795,11 @@ void price_cyber(struct obj_data *obj)
     case CYB_HANDBLADE:
       GET_CYBERWARE_RATING(obj) = 0;
       if (GET_CYBERWARE_FLAGS(obj)) {
-        GET_CYBERWARE_ESSENCE_COST(obj) = 25;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 25;
         GET_OBJ_COST(obj) = 10000;
       } else {
         GET_OBJ_COST(obj) = 7500;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
       }
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 5;
@@ -6724,12 +6808,12 @@ void price_cyber(struct obj_data *obj)
       GET_CYBERWARE_RATING(obj) = 0;
       GET_OBJ_AVAILDAY(obj) = 3;
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), 1 << CYBERWEAPON_RETRACTABLE)) {
-        GET_CYBERWARE_ESSENCE_COST(obj) = 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20;
         GET_OBJ_COST(obj) = 9000;
         GET_OBJ_AVAILTN(obj) = 5;
       } else {
         GET_OBJ_COST(obj) = 7500;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
         GET_OBJ_AVAILTN(obj) = 3;
       }
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), 1 << CYBERWEAPON_IMPROVED)) {
@@ -6740,19 +6824,19 @@ void price_cyber(struct obj_data *obj)
     case CYB_HANDSPUR:
       GET_CYBERWARE_RATING(obj) = 0;
       if (GET_CYBERWARE_FLAGS(obj)) {
-        GET_CYBERWARE_ESSENCE_COST(obj) = 30;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 30;
         GET_OBJ_COST(obj) = 11500;
         GET_OBJ_AVAILTN(obj) = 5;
       } else {
         GET_OBJ_COST(obj) = 7000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
         GET_OBJ_AVAILTN(obj) = 3;
       }
       GET_OBJ_AVAILDAY(obj) = 3;
       break;
     case CYB_VOICEMOD:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 20;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20;
       GET_OBJ_COST(obj) = 45000;
       GET_OBJ_AVAILTN(obj) = 2;
       GET_OBJ_AVAILDAY(obj) = 1;
@@ -6762,21 +6846,21 @@ void price_cyber(struct obj_data *obj)
       GET_OBJ_AVAILDAY(obj) = 1;
       switch (GET_CYBERWARE_RATING(obj)) {
         case 1:
-          GET_CYBERWARE_ESSENCE_COST(obj) = 50;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 50;
           GET_OBJ_COST(obj) = 15000;
           break;
         case 2:
-          GET_CYBERWARE_ESSENCE_COST(obj) = 125;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 125;
           GET_OBJ_COST(obj) = 40000;
           break;
         case 3:
-          GET_CYBERWARE_ESSENCE_COST(obj) = 280;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 280;
           GET_OBJ_COST(obj) = 90000;
           break;
       }
       break;
     case CYB_DERMALPLATING:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 50 * GET_CYBERWARE_RATING(obj);
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 50 * GET_CYBERWARE_RATING(obj);
       GET_OBJ_AVAILTN(obj) = 4;
       GET_OBJ_AVAILDAY(obj) = 12;
       switch (GET_CYBERWARE_RATING(obj)) {
@@ -6796,10 +6880,10 @@ void price_cyber(struct obj_data *obj)
       GET_OBJ_AVAILDAY(obj) = 4;
       if (!GET_CYBERWARE_FLAGS(obj)) {
         GET_OBJ_COST(obj) = GET_OBJ_VAL(obj, 1) * 15000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = GET_OBJ_VAL(obj, 1) * 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = GET_OBJ_VAL(obj, 1) * 10;
       } else {
         GET_OBJ_COST(obj) = GET_OBJ_VAL(obj, 1) * 10000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = GET_OBJ_VAL(obj, 1) * 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = GET_OBJ_VAL(obj, 1) * 20;
       }
       break;
     case CYB_VCR:
@@ -6807,15 +6891,15 @@ void price_cyber(struct obj_data *obj)
       if (GET_CYBERWARE_RATING(obj) == 1) {
         GET_OBJ_COST(obj) = 12000;
         GET_OBJ_AVAILTN(obj) = 6;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 200;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 200;
       } else {
         GET_OBJ_AVAILTN(obj) = 8;
         if (GET_CYBERWARE_RATING(obj) == 2) {
           GET_OBJ_COST(obj) = 60000;
-          GET_CYBERWARE_ESSENCE_COST(obj) = 300;
+          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 300;
         } else {
           GET_OBJ_COST(obj) = 300000;
-          GET_CYBERWARE_ESSENCE_COST(obj) = 500;
+          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 500;
         }
       }
       break;
@@ -6824,28 +6908,28 @@ void price_cyber(struct obj_data *obj)
         GET_OBJ_COST(obj) = 500000;
         GET_OBJ_AVAILTN(obj) = 8;
         GET_OBJ_AVAILDAY(obj) = 14;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 500;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 500;
       } else {
         GET_OBJ_AVAILTN(obj) = 4;
         GET_OBJ_AVAILDAY(obj) = 8;
         if (GET_CYBERWARE_RATING(obj) == 1) {
           GET_OBJ_COST(obj) = 55000;
-          GET_CYBERWARE_ESSENCE_COST(obj) = 200;
+          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 200;
         } else {
           GET_OBJ_COST(obj) = 165000;
-          GET_CYBERWARE_ESSENCE_COST(obj) = 300;
+          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 300;
         }
       }
       break;
     case CYB_REACTIONENHANCE:
       GET_OBJ_COST(obj) = GET_CYBERWARE_RATING(obj) * 60000;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 30 * GET_CYBERWARE_RATING(obj);
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 30 * GET_CYBERWARE_RATING(obj);
       GET_OBJ_AVAILDAY(obj) = 7;
       GET_OBJ_AVAILTN(obj) = 6;
       break;
     case CYB_REFLEXTRIGGER:
       GET_OBJ_COST(obj) = 13000;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 20;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20;
       GET_OBJ_AVAILDAY(obj) = 8;
       GET_OBJ_AVAILTN(obj) = 4;
       if (GET_CYBERWARE_FLAGS(obj))
@@ -6853,35 +6937,35 @@ void price_cyber(struct obj_data *obj)
       break;
     case CYB_BALANCEAUG:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 40;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 40;
       GET_OBJ_COST(obj) = 14000;
       GET_OBJ_AVAILTN(obj) = 8;
       GET_OBJ_AVAILDAY(obj) = 16;
       break;
     case CYB_ORALDART:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 25;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 25;
       GET_OBJ_COST(obj) = 3600;
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 7;
       break;
     case CYB_ORALGUN:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 40;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 40;
       GET_OBJ_COST(obj) = 5600;
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 3;
       break;
     case CYB_ORALSLASHER:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 25;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 25;
       GET_OBJ_COST(obj) = 10050;
       GET_OBJ_AVAILTN(obj) = 8;
       GET_OBJ_AVAILDAY(obj) = 7;
       break;
     case CYB_ASIST:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 0;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 0;
       GET_OBJ_COST(obj) = 1000;
       GET_OBJ_AVAILTN(obj) = 3;
       GET_OBJ_AVAILDAY(obj) = 1.5;
@@ -6896,23 +6980,23 @@ void price_cyber(struct obj_data *obj)
       }
 
       // Essence and nuyen costs are multiplied by the slots.
-      GET_CYBERWARE_ESSENCE_COST(obj) = 10 * GET_CYBERWARE_RATING(obj) * GET_CYBERWARE_FLAGS(obj);
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10 * GET_CYBERWARE_RATING(obj) * GET_CYBERWARE_FLAGS(obj);
       GET_OBJ_COST(obj) = 5000 * GET_CYBERWARE_RATING(obj) * GET_CYBERWARE_FLAGS(obj);
       break;
     case CYB_DATACOMPACT:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 5 + (GET_CYBERWARE_RATING(obj) * 5);
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 5 + (GET_CYBERWARE_RATING(obj) * 5);
       GET_OBJ_COST(obj) = 9500 * GET_CYBERWARE_RATING(obj);
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 2.5;
       break;
     case CYB_ENCEPHALON:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 75 * GET_CYBERWARE_RATING(obj);
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 75 * GET_CYBERWARE_RATING(obj);
       GET_OBJ_COST(obj) = GET_CYBERWARE_RATING(obj) > 1 ? 115000 : 40000;
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 12;
       break;
     case CYB_MATHSSPU:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 5 + (GET_CYBERWARE_RATING(obj) * 5);
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 5 + (GET_CYBERWARE_RATING(obj) * 5);
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 2.5;
       switch (GET_CYBERWARE_RATING(obj)) {
@@ -6929,21 +7013,21 @@ void price_cyber(struct obj_data *obj)
       break;
     case CYB_BALANCETAIL:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 50;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 50;
       GET_OBJ_COST(obj) = 10000;
       GET_OBJ_AVAILTN(obj) = 8;
       GET_OBJ_AVAILDAY(obj) = 7;
       break;
     case CYB_BODYCOMPART:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 20;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20;
       GET_OBJ_COST(obj) = 5000;
       GET_OBJ_AVAILTN(obj) = 4;
       GET_OBJ_AVAILDAY(obj) = 2;
       break;
     case CYB_FIN:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 30;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 30;
       GET_OBJ_COST(obj) = 10500;
       GET_OBJ_AVAILTN(obj) = 5;
       GET_OBJ_AVAILDAY(obj) = 2;
@@ -6951,7 +7035,7 @@ void price_cyber(struct obj_data *obj)
     case CYB_SKULL:
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 4;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 75;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 75;
       MAKE_INCOMPATIBLE_WITH_MAGIC(obj);
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), SKULL_MOD_OBVIOUS)) {
@@ -6961,7 +7045,7 @@ void price_cyber(struct obj_data *obj)
       } else {
         log_vfprintf("ERROR: %s is neither obvious nor synthetic!", GET_OBJ_NAME(obj));
         GET_OBJ_COST(obj) = 99999999;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 999;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 999;
       }
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), SKULL_MOD_ARMOR_MOD1)) {
@@ -6972,7 +7056,7 @@ void price_cyber(struct obj_data *obj)
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), SKULL_MOD_TAC_COMP)) {
         GET_OBJ_COST(obj) += 400000 + (GET_CYBERWARE_RATING(obj) * 20000);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20 + (GET_CYBERWARE_RATING(obj) * 20);
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20 + (GET_CYBERWARE_RATING(obj) * 20);
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 12);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 60);
       }
@@ -6980,7 +7064,7 @@ void price_cyber(struct obj_data *obj)
     case CYB_TORSO:
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 4;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 150;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 150;
       MAKE_INCOMPATIBLE_WITH_MAGIC(obj);
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), TORSO_MOD_OBVIOUS)) {
@@ -6990,7 +7074,7 @@ void price_cyber(struct obj_data *obj)
       } else {
         log_vfprintf("ERROR: %s is neither obvious nor synthetic!", GET_OBJ_NAME(obj));
         GET_OBJ_COST(obj) = 99999999;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 999;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 999;
       }
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), TORSO_MOD_ARMOR_MOD1)) {
@@ -7012,7 +7096,7 @@ void price_cyber(struct obj_data *obj)
     case CYB_LEGS:
       GET_OBJ_AVAILTN(obj) = 4;
       GET_OBJ_AVAILDAY(obj) = 4;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 200;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 200;
       MAKE_INCOMPATIBLE_WITH_MAGIC(obj);
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), LEGS_MOD_OBVIOUS)) {
@@ -7022,7 +7106,7 @@ void price_cyber(struct obj_data *obj)
       } else {
         log_vfprintf("ERROR: %s is neither obvious nor synthetic!", GET_OBJ_NAME(obj));
         GET_OBJ_COST(obj) = 99999999;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 999;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 999;
       }
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), LEGS_MOD_ARMOR_MOD1)) {
@@ -7063,11 +7147,11 @@ void price_cyber(struct obj_data *obj)
       }
       break;
     case CYB_ARMS:
-      GET_OBJ_AVAILDAY(obj) = GET_OBJ_AVAILTN(obj) = GET_CYBERWARE_ESSENCE_COST(obj) = GET_OBJ_COST(obj) = 0;
+      GET_OBJ_AVAILDAY(obj) = GET_OBJ_AVAILTN(obj) = GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = GET_OBJ_COST(obj) = 0;
 
       GET_OBJ_AVAILTN(obj) = 4;
       GET_OBJ_AVAILDAY(obj) = 4;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 200;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 200;
       MAKE_INCOMPATIBLE_WITH_MAGIC(obj);
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), ARMS_MOD_OBVIOUS)) {
@@ -7077,7 +7161,7 @@ void price_cyber(struct obj_data *obj)
       } else {
         log_vfprintf("ERROR: %s is neither obvious nor synthetic!", GET_OBJ_NAME(obj));
         GET_OBJ_COST(obj) = 99999999;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 999;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 999;
       }
 
       if (IS_SET(GET_CYBERWARE_FLAGS(obj), ARMS_MOD_ARMOR_MOD1)) {
@@ -7120,7 +7204,7 @@ void price_cyber(struct obj_data *obj)
       }
       break;
     case CYB_DERMALSHEATHING:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 70 * GET_CYBERWARE_RATING(obj);
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 70 * GET_CYBERWARE_RATING(obj);
       GET_OBJ_AVAILDAY(obj) = 14;
       if (GET_CYBERWARE_RATING(obj) == 3) {
         GET_OBJ_AVAILTN(obj) = 8;
@@ -7132,7 +7216,7 @@ void price_cyber(struct obj_data *obj)
         else GET_OBJ_COST(obj) = 60000;
       }
       if (GET_CYBERWARE_FLAGS(obj)) {
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
         GET_OBJ_COST(obj) += 150000;
         GET_OBJ_AVAILTN(obj) += 2;
         GET_OBJ_AVAILDAY(obj) += 4;
@@ -7140,26 +7224,26 @@ void price_cyber(struct obj_data *obj)
       break;
     case CYB_FOOTANCHOR:
       GET_OBJ_VAL(obj, 1) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 40;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 40;
       GET_OBJ_COST(obj) = 14000;
       GET_OBJ_AVAILTN(obj) = 6;
       GET_OBJ_AVAILDAY(obj) = 7;
       break;
     case CYB_HYDRAULICJACK:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 75 + (25 * GET_CYBERWARE_RATING(obj));
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 75 + (25 * GET_CYBERWARE_RATING(obj));
       GET_OBJ_COST(obj) = GET_CYBERWARE_RATING(obj) * 5000;
       GET_OBJ_AVAILTN(obj) = 5;
       GET_OBJ_AVAILDAY(obj) = 6;
       break;
     case CYB_SKILLWIRE:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 20 * GET_CYBERWARE_RATING(obj);
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 20 * GET_CYBERWARE_RATING(obj);
       GET_OBJ_COST(obj) = GET_CYBERWARE_RATING(obj) * GET_OBJ_VAL(obj, 3) * 500;
       GET_OBJ_AVAILTN(obj) = GET_CYBERWARE_RATING(obj);
       GET_OBJ_AVAILDAY(obj) = 10;
       break;
     case CYB_MOVEBYWIRE:
       GET_OBJ_COST(obj) = 125000 * (int)pow((double)2, (double)GET_CYBERWARE_RATING(obj));
-      GET_CYBERWARE_ESSENCE_COST(obj) = 100 + (150 * GET_CYBERWARE_RATING(obj));
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 100 + (150 * GET_CYBERWARE_RATING(obj));
       switch (GET_CYBERWARE_RATING(obj)) {
         case 1:
           GET_OBJ_AVAILTN(obj) = 8;
@@ -7181,13 +7265,13 @@ void price_cyber(struct obj_data *obj)
       break;
     case CYB_CLIMBINGCLAWS:
       GET_CYBERWARE_RATING(obj) = 0;
-      GET_CYBERWARE_ESSENCE_COST(obj) = 30;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 30;
       GET_OBJ_COST(obj) = 10000;
       GET_OBJ_AVAILTN(obj) = 5;
       GET_OBJ_AVAILDAY(obj) = 3;
       break;
     case CYB_SMARTLINK:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 50;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 50;
       switch (GET_CYBERWARE_RATING(obj)) {
         case 1:
           GET_OBJ_COST(obj) = 2500;
@@ -7203,7 +7287,7 @@ void price_cyber(struct obj_data *obj)
       break;
     case CYB_MUSCLEREP:
       GET_OBJ_COST(obj) = GET_CYBERWARE_RATING(obj) * 20000;
-      GET_CYBERWARE_ESSENCE_COST(obj) = GET_CYBERWARE_RATING(obj) * 100;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = GET_CYBERWARE_RATING(obj) * 100;
       GET_OBJ_AVAILTN(obj) = 4;
       GET_OBJ_AVAILDAY(obj) = 4;
       break;
@@ -7211,12 +7295,12 @@ void price_cyber(struct obj_data *obj)
       // Auto-remove the vision affs from this object.
       obj->obj_flags.bitvector.RemoveBits(AFF_LOW_LIGHT, AFF_INFRAVISION, AFF_ULTRASOUND, ENDBIT);
 
-      GET_OBJ_AVAILDAY(obj) = GET_OBJ_AVAILTN(obj) = GET_CYBERWARE_ESSENCE_COST(obj) = GET_OBJ_COST(obj) = 0;
+      GET_OBJ_AVAILDAY(obj) = GET_OBJ_AVAILTN(obj) = GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = GET_OBJ_COST(obj) = 0;
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_CAMERA)) {
         GET_OBJ_COST(obj) = 5000;
         GET_OBJ_AVAILTN(obj) = 6;
         GET_OBJ_AVAILDAY(obj) = 1;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 40;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 40;
       }
 
       // These are redundant items, so if both are set we take the better.
@@ -7225,13 +7309,13 @@ void price_cyber(struct obj_data *obj)
           GET_OBJ_COST(obj) += 1600;
           GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
           GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-          GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
         }
         else if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_DISPLAYLINK)) {
           GET_OBJ_COST(obj) += 1000;
           GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
           GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 1.5);
-          GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
         }
       }
 
@@ -7239,14 +7323,14 @@ void price_cyber(struct obj_data *obj)
         GET_OBJ_COST(obj) += 2000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 5);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
       }
 
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_LOWLIGHT)) {
         GET_OBJ_COST(obj) += 3000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 1.5);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_PROTECTIVECOVERS)) {
         GET_OBJ_COST(obj) += 500;
@@ -7257,73 +7341,73 @@ void price_cyber(struct obj_data *obj)
         GET_OBJ_COST(obj) += 450;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 3);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 1);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_RETINALDUPLICATION)) {
         GET_OBJ_COST(obj) += GET_OBJ_VAL(obj, 1) * 25000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 8);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 7);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_THERMO)) {
         GET_OBJ_COST(obj) += 3000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 1.5);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_OPTMAG1)) {
         GET_OBJ_COST(obj) += 2500;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_OPTMAG2)) {
         GET_OBJ_COST(obj) += 4000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_OPTMAG3)) {
         GET_OBJ_COST(obj) += 6000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 5);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_ELECMAG1)) {
         GET_OBJ_COST(obj) += 3500;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 5);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_ELECMAG2)) {
         GET_OBJ_COST(obj) += 7500;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 5);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_ELECMAG3)) {
         GET_OBJ_COST(obj) += 11000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 8);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 10;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_GUN)) {
         GET_OBJ_COST(obj) += 6400;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 6);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 1);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 40;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 40;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_DATAJACK)) {
         GET_OBJ_COST(obj) += 2200;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 6);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 25;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 25;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_DART)) {
         GET_OBJ_COST(obj) += 4200;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 8);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 14);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 25;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 25;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_LASER)) {
         switch (GET_OBJ_VAL(obj, 1)) {
@@ -7331,19 +7415,19 @@ void price_cyber(struct obj_data *obj)
             GET_OBJ_COST(obj) += 3000;
             GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 8);
             GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 3);
-            GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+            GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
             break;
           case 2:
             GET_OBJ_COST(obj) += 5000;
             GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 8);
             GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 7);
-            GET_CYBERWARE_ESSENCE_COST(obj) += 30;
+            GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 30;
             break;
           case 3:
             GET_OBJ_COST(obj) += 8000;
             GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 8);
             GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 14);
-            GET_CYBERWARE_ESSENCE_COST(obj) += 50;
+            GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 50;
             break;
         }
       }
@@ -7351,19 +7435,19 @@ void price_cyber(struct obj_data *obj)
         GET_OBJ_COST(obj) += 20;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 4);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 3);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_ULTRASOUND)) {
         GET_OBJ_COST(obj) += 10000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 6);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 2);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 50;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 50;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_CYBEREYES)) {
         GET_OBJ_COST(obj) += 4000;
         GET_OBJ_AVAILTN(obj) = MAX(GET_OBJ_AVAILTN(obj), 2);
         GET_OBJ_AVAILDAY(obj) = MAX(GET_OBJ_AVAILDAY(obj), 1);
-        GET_CYBERWARE_ESSENCE_COST(obj) += 20;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) += 20;
       }
       if (IS_SET(GET_OBJ_VAL(obj, 3), EYE_COSMETIC)) {
         GET_OBJ_COST(obj) += 1000;
@@ -7372,7 +7456,7 @@ void price_cyber(struct obj_data *obj)
       }
       break;
     case CYB_TACTICALCOMPUTER:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 130 + (GET_OBJ_VAL(obj, 1) * 20);
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 130 + (GET_OBJ_VAL(obj, 1) * 20);
       GET_OBJ_AVAILTN(obj) = 12;
       GET_OBJ_AVAILDAY(obj) = 60;
 #ifdef DIES_IRAE
@@ -7395,7 +7479,7 @@ void price_cyber(struct obj_data *obj)
       }
       break;
     case CYB_CRD:
-      GET_CYBERWARE_ESSENCE_COST(obj) = 30;
+      GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 30;
       GET_OBJ_AVAILTN(obj) = 4;
       GET_OBJ_AVAILDAY(obj) = 3;
       switch (GET_CYBERWARE_RATING(obj)) {
@@ -7413,12 +7497,12 @@ void price_cyber(struct obj_data *obj)
     case CYB_FANGS:
       GET_CYBERWARE_RATING(obj) = 0;
       if (GET_CYBERWARE_FLAGS(obj)) {
-        GET_CYBERWARE_ESSENCE_COST(obj) = 15;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 15;
         GET_OBJ_COST(obj) = 8000;
         GET_OBJ_AVAILTN(obj) = 5;
       } else {
         GET_OBJ_COST(obj) = 5000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
         GET_OBJ_AVAILTN(obj) = 4;
       }
       GET_OBJ_AVAILDAY(obj) = 2;
@@ -7426,12 +7510,12 @@ void price_cyber(struct obj_data *obj)
     case CYB_HORNS:
       GET_CYBERWARE_RATING(obj) = 0;
       if (GET_CYBERWARE_FLAGS(obj)) {
-        GET_CYBERWARE_ESSENCE_COST(obj) = 25;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 25;
         GET_OBJ_COST(obj) = 16000;
         GET_OBJ_AVAILTN(obj) = 5;
       } else {
         GET_OBJ_COST(obj) = 12000;
-        GET_CYBERWARE_ESSENCE_COST(obj) = 10;
+        GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = 10;
         GET_OBJ_AVAILTN(obj) = 4;
       }
       GET_OBJ_AVAILDAY(obj) = 2;
@@ -7456,11 +7540,11 @@ void price_cyber(struct obj_data *obj)
       GET_OBJ_AVAILDAY(obj) *= 3;
       break;
   }
-  GET_CYBERWARE_ESSENCE_COST(obj) = (int) round(GET_CYBERWARE_ESSENCE_COST(obj) * grade_essence_modifier);
+  GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = (int) round(GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) * grade_essence_modifier);
   // Finally, apply the cybereye package discount.
   if (GET_CYBERWARE_TYPE(obj) == CYB_EYES && IS_SET(GET_CYBERWARE_FLAGS(obj), EYE_CYBEREYES)) {
-    GET_CYBERWARE_ESSENCE_COST(obj) = MAX((int) round(20 * grade_essence_modifier),
-                                          GET_CYBERWARE_ESSENCE_COST(obj) - 50);
+    GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) = MAX((int) round(20 * grade_essence_modifier),
+                                          GET_CYBERWARE_SETTABLE_ESSENCE_COST(obj) - 50);
   }
 }
 
@@ -7797,7 +7881,7 @@ void initialize_and_alphabetize_room_flags() {
 
 std::map<std::string, int> item_extra_flag_map = {};
 void initialize_and_alphabetize_item_extra_flags() {
-  for (int idx = 0; idx < ROOM_MAX; idx++) {
+  for (int idx = 0; idx < MAX_ITEM_EXTRA; idx++) {
     switch(idx) {
       case 4:
       case 5:
@@ -7811,7 +7895,7 @@ void initialize_and_alphabetize_item_extra_flags() {
 
 std::map<std::string, int> mob_flag_map = {};
 void initialize_and_alphabetize_mob_flags() {
-  for (int idx = 0; idx < ROOM_MAX; idx++) {
+  for (int idx = 0; idx < MOB_MAX; idx++) {
     switch(idx) {
       case 4:
       case 17:
@@ -7823,4 +7907,32 @@ void initialize_and_alphabetize_mob_flags() {
     }
     mob_flag_map[std::string(action_bits[idx])] = idx;
   }
+}
+
+std::map<std::string, int> wear_flag_map_for_exdescs = {};
+void initialize_and_alphabetize_wear_flags_for_exdescs() {
+  for (int idx = 0; idx < ITEM_WEAR_MAX; idx++) {
+    switch(idx) {
+      case ITEM_WEAR_TAKE:
+      case ITEM_WEAR_BODY:
+      case ITEM_WEAR_SHIELD:
+      case ITEM_WEAR_ABOUT:
+      case ITEM_WEAR_WIELD:
+      case ITEM_WEAR_HOLD:
+      case ITEM_WEAR_SOCK:
+      case ITEM_WEAR_LAPEL:
+        continue;
+    }
+    wear_flag_map_for_exdescs[std::string(wear_bits_for_pc_exdescs[idx])] = idx;
+  }
+}
+
+extern void alphabetize_pet_echoes_by_name();
+
+void initialize_and_alphabetize_flag_maps() {
+  alphabetize_pet_echoes_by_name();
+  initialize_and_alphabetize_room_flags();
+  initialize_and_alphabetize_item_extra_flags();
+  initialize_and_alphabetize_mob_flags();
+  initialize_and_alphabetize_wear_flags_for_exdescs();
 }

@@ -43,7 +43,6 @@ bool part_is_nerps(int part_type) {
     case PART_CELLULAR:
     case PART_LASER:
     case PART_MICROWAVE:
-    case PART_RADIO:
     case PART_SATELLITE:
     case PART_SIGNAL_AMP:
       return TRUE;
@@ -97,7 +96,16 @@ int get_part_maximum_rating(struct obj_data *part) {
     case PART_SATELLITE:
       return mpcp;
     case PART_ASIST_HOT:
+    case PART_ASIST_COLD:
     case PART_RAS_OVERRIDE:
+    case PART_ICCM:
+    case PART_PORTS:
+    case PART_REALITY_FILTER:
+    case PART_MATRIX_INTERFACE:
+    case PART_MASER:
+    case PART_LASER:
+    case PART_MICROWAVE:
+    case PART_SIGNAL_AMP:
       return 0;
   }
 
@@ -1130,7 +1138,7 @@ ACMD(do_progress)
   }
 
   if (AFF_FLAGS(ch).IsSet(AFF_DESIGN)) {
-    amount_left = GET_OBJ_VAL(GET_BUILDING(ch), 4);
+    amount_left = GET_DESIGN_DESIGNING_TICKS_LEFT(GET_BUILDING(ch));
     amount_needed = GET_OBJ_TIMER(GET_BUILDING(ch));
     send_to_char(ch, "You are about %2.2f%% of the way through designing %s.\r\n",
            (((float)(amount_needed - amount_left) * 100) / amount_needed), GET_OBJ_NAME(GET_BUILDING(ch)));
@@ -1143,6 +1151,14 @@ ACMD(do_progress)
     float percentage = (current / target) * 100;
 
     send_to_char(ch, "You are about %d%% of the way through the conjuring process.\r\n", (int) percentage);
+    return;
+  }
+
+  if (AFF_FLAGS(ch).IsSet(AFF_COMPLEX_FORM_PROGRAM)) {
+    amount_left = GET_COMPLEX_FORM_LEARNING_TICKS_LEFT(GET_BUILDING(ch));
+    amount_needed = GET_COMPLEX_FORM_ORIGINAL_TICKS_LEFT(GET_BUILDING(ch));
+    send_to_char(ch, "You are about %2.2f%% of the way through learning %s.\r\n",
+           (((float)(amount_needed - amount_left) * 100) / amount_needed), GET_OBJ_NAME(GET_BUILDING(ch)));
     return;
   }
 

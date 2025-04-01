@@ -30,6 +30,7 @@
 #include "redit.hpp"
 #include "factions.hpp"
 #include "metrics.hpp"
+#include "gmcp.hpp"
 
 int initiative_until_global_reroll = 0;
 
@@ -270,6 +271,7 @@ bool update_pos(struct char_data * victim, bool protect_spells_from_purge)
       if (GET_BIOWARE_TYPE(bio) == BIO_PAINEDITOR && GET_BIOWARE_IS_ACTIVATED(bio)) {
         // Ensure they're not trapped in mort status by an active pain editor.
         GET_POS(victim) = MAX(POS_LYING, GET_POS(victim));
+        SendGMCPCharVitals(victim); 
         return FALSE;
       }
     }
@@ -281,6 +283,7 @@ bool update_pos(struct char_data * victim, bool protect_spells_from_purge)
 
   // Are they doing fine?
   else if ((GET_PHYSICAL(victim) >= 100) && (GET_POS(victim) > POS_STUNNED)) {
+    SendGMCPCharVitals(victim); 
     return FALSE;
   }
 
@@ -291,6 +294,7 @@ bool update_pos(struct char_data * victim, bool protect_spells_from_purge)
     }
 
     GET_POS(victim) = victim->in_veh ? POS_SITTING : POS_STANDING;
+    SendGMCPCharVitals(victim); 
     return FALSE;
   }
 
@@ -319,6 +323,7 @@ bool update_pos(struct char_data * victim, bool protect_spells_from_purge)
   GET_INIT_ROLL(victim) = 0;
 
   if (restore_to_full_health_if_still_in_chargen(victim)) {
+    SendGMCPCharVitals(victim); 
     return FALSE;
   }
 
@@ -353,6 +358,7 @@ bool update_pos(struct char_data * victim, bool protect_spells_from_purge)
     }
   }
 
+  SendGMCPCharVitals(victim); 
   return FALSE;
 }
 #undef MAKE_MORTALLY_WOUNDED
@@ -723,10 +729,18 @@ void make_corpse(struct char_data * ch)
   /* transfer nuyen & credstick */
   if (IS_NPC(ch))
   {
-    if (MOB_FLAGGED(ch, MOB_NO_NUYEN_LOOT_DROPS) || vnum_from_non_connected_zone(GET_MOB_VNUM(ch))) {
+    if (MOB_FLAGGED(ch, MOB_NO_NUYEN_LOOT_DROPS)) {
       nuyen = 0;
       credits = 0;
-    } else {
+    } 
+#ifndef IS_BUILDPORT
+    // Refuse to generate rewards from unapproved zones on the main port.
+    else if (vnum_from_non_approved_zone(GET_MOB_VNUM(ch))) {
+      nuyen = 0;
+      credits = 0;
+    }
+#endif
+    else {
       if (AFF_FLAGGED(ch, AFF_CHEATLOG_MARK)) {
         // Someone has given us money, so we return the exact and full amount.
         nuyen = GET_NUYEN(ch);
@@ -977,11 +991,7 @@ void raw_kill(struct char_data * ch, idnum_t cause_of_death_idnum)
         ch->persona = NULL;
         PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
       } else if (PLR_FLAGGED(ch, PLR_MATRIX) && ch->in_room) {
-        if (access_level(ch, LVL_PRESIDENT))
-          send_to_char(ch, "^YPLR_MATRIX set, but not in mtx.\r\n");
-        for (struct char_data *temp = get_ch_in_room(ch)->people; temp; temp = temp->next_in_room)
-          if (PLR_FLAGGED(temp, PLR_MATRIX))
-            temp->persona->decker->hitcher = NULL;
+        clear_hitcher(ch, TRUE);
       }
 
       char_from_room(ch);
@@ -1228,7 +1238,7 @@ int calc_karma(struct char_data *ch, struct char_data *vict)
   base = (ch ? MIN(max_exp_gain, base) : base);
   base = MAX(base, 1);
 
-  if (!IS_SENATOR(ch) && vnum_from_non_connected_zone(GET_MOB_VNUM(vict)))
+  if (!IS_SENATOR(ch) && vnum_from_non_approved_zone(GET_MOB_VNUM(vict)))
     base = 0;
 
 
@@ -2371,9 +2381,7 @@ void docwagon_retrieve(struct char_data *ch) {
     ch->persona = NULL;
     PLR_FLAGS(ch).RemoveBit(PLR_MATRIX);
   } else if (PLR_FLAGGED(ch, PLR_MATRIX)) {
-    for (struct char_data *temp = room->people; temp; temp = temp->next_in_room)
-      if (PLR_FLAGGED(temp, PLR_MATRIX))
-        temp->persona->decker->hitcher = NULL;
+    clear_hitcher(ch, TRUE);
   }
   docwagon_message(ch);
   // death_penalty(ch);  /* Penalty for deadly wounds */
@@ -2972,7 +2980,7 @@ bool can_hurt(struct char_data *ch, struct char_data *victim, int attacktype, bo
             && IS_SENATOR(ch->master)
             && !access_level(ch->master, LVL_ADMIN)))
         && IS_NPC(victim)
-        && !vnum_from_non_connected_zone(GET_MOB_VNUM(victim)))
+        && !vnum_from_non_approved_zone(GET_MOB_VNUM(victim)))
     {
       return false;
     }
@@ -3517,7 +3525,7 @@ bool raw_damage(struct char_data *ch, struct char_data *victim, int dam, int att
   switch (GET_POS(victim))
   {
     case POS_MORTALLYW:
-      stop_driving(ch, TRUE);
+      stop_driving(victim, TRUE);
       if (IS_NPC(victim) && MOB_FLAGGED(victim, MOB_INANIMATE)) {
         act("$n is critically damaged, and will fail soon, if not aided.",
             TRUE, victim, 0, 0, TO_ROOM);
@@ -3541,7 +3549,7 @@ bool raw_damage(struct char_data *ch, struct char_data *victim, int dam, int att
       }
       break;
     case POS_STUNNED:
-      stop_driving(ch, TRUE);
+      stop_driving(victim, TRUE);
       if (IS_NPC(victim) && MOB_FLAGGED(victim, MOB_INANIMATE)) {
         act("$n is rebooting from heavy damage.",
             TRUE, victim, 0, 0, TO_ROOM);
@@ -3555,7 +3563,7 @@ bool raw_damage(struct char_data *ch, struct char_data *victim, int dam, int att
       }
       break;
     case POS_DEAD:
-      stop_driving(ch, TRUE);
+      stop_driving(victim, TRUE);
       if (IS_NPC(victim)) {
         if (MOB_FLAGGED(victim, MOB_INANIMATE)) {
           act("$n terminally fails in a shower of sparks!", FALSE, victim, 0, 0, TO_ROOM);
@@ -6710,7 +6718,7 @@ void chkdmg(struct veh_data * veh)
       const char *repr = generate_new_loggable_representation(obj);
 
       nextobj = obj->next_content;
-      switch(number(0, 2)) {
+      switch(number(0, 1)) {
         case 0:
           // Item stays in vehicle, no-op.
           break;
@@ -7052,6 +7060,15 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
     act(buf2, FALSE, ch, NULL, NULL, TO_CHAR);
     snprintf(buf, sizeof(buf), "A %s ricochets off of your ride.\r\n", ammo_type);
     send_to_veh(buf, veh, 0, FALSE);
+
+    // Mobs stop hitting and flee instead if they can't damage you.
+    if (!ch->desc && !MOB_FLAGGED(ch, MOB_SENTINEL)) {
+      stop_fighting(ch);
+#ifdef MOBS_FLEE_IF_THEY_CANT_DAMAGE_VEHICLE
+      char tmp_buf[50] = {0};
+      do_flee(ch, tmp_buf, 0, 0);
+#endif
+    }
     return FALSE;
   } else {
     // For AV rounds, this was subtracted before the armor check.

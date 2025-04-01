@@ -7,6 +7,10 @@
 #include <string.h>
 #include <mysql/mysql.h>
 #include <vector>
+#include <iostream>
+#include <algorithm>
+#include <sstream>
+#include <iterator>
 
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
@@ -67,6 +71,14 @@ void verify_data(struct char_data *ch, const char *line, int cmd, int subcmd, co
   else {
 
   }
+}
+
+std::string join(std::vector<std::string> const &strings, std::string delim)
+{
+    std::stringstream ss;
+    std::copy(strings.begin(), strings.end(),
+        std::ostream_iterator<std::string>(ss, delim.c_str()));
+    return ss.str();
 }
 
 void do_pgroup_debug(struct char_data *ch, char *argument) {
@@ -155,6 +167,7 @@ struct eti_test_values_struct {
 extern long payout_slots_testable(long bet);
 extern void load_saved_veh(bool purge_existing);
 extern void save_vehicles(bool);
+extern void debug_pet_menu(struct char_data *ch);
 
 extern bf::path global_vehicles_dir;
 
@@ -181,6 +194,48 @@ ACMD(do_debug) {
   if (!str_cmp(arg1, "pointers")) {
     send_to_char(ch, "OK, validating every pointer we can think of.\r\n");
     verify_every_pointer_we_can_think_of();
+    return;
+  }
+
+#ifdef TEMPORARY_COMPILATION_GUARD
+  if (!str_cmp(arg1, "minigame")) {
+    extern void minigame_debug(struct char_data *ch, char *rest_of_argument);
+    minigame_debug(ch, rest_of_argument);
+    return;
+  }
+#endif
+
+  if (!str_cmp(arg1, "idledelete")) {
+    idnum_t idnum = atol(rest_of_argument);
+    FAILURE_CASE_PRINTF(idnum <= 1, "You must enter an IDNUM > 1 to do this; you entered %d.", idnum);
+    FAILURE_CASE_PRINTF(get_player_rank(idnum) == LVL_PRESIDENT, "You can't delete game owners with this command. Demote them first.");
+
+    const char *name = get_player_name(idnum);
+    mudlog_vfprintf(ch, LOG_WIZLOG, "Invoked idledelete on %ld (%s)", idnum, name);
+
+    DeleteChar(idnum);
+    send_to_char(ch, "OK, deleted %s.\r\n", name);
+
+    delete [] name;
+    return;
+  }
+
+  if (!str_cmp(arg1, "pets")) {
+    debug_pet_menu(ch);
+    return;
+  }
+
+  if (!str_cmp(arg1, "writeaptexclusionquery")) {
+    std::vector<std::string> vnum_vec = {};
+    for (auto &complex : global_apartment_complexes) {
+      for (auto &apartment : complex->get_apartments()) {
+        for (auto &room : apartment->get_rooms()) {
+          vnum_vec.push_back(std::string(vnum_to_string(room->get_vnum())));
+        }
+      }
+    }
+    std::string str = join(vnum_vec, "|");
+    send_to_char(ch, "(%s)", str.c_str());
     return;
   }
 

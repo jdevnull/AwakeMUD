@@ -36,6 +36,8 @@
 #include "moderation.hpp"
 #include "vehicles.hpp"
 #include "factions.hpp"
+#include "player_exdescs.hpp"
+#include "pets.hpp"
 
 #define DO_FORMAT_INDENT   1
 #define DONT_FORMAT_INDENT 0
@@ -258,7 +260,7 @@ void string_add(struct descriptor_data *d, char *str)
 #define REPLACE_STRING_WITH_INDENTED_FORMATTING(target) (REPLACE_STRING_FORMAT_SPECIFIED(target, DO_FORMAT_INDENT))
 
 
-    if (d->character && d->str && *(d->str) && check_for_banned_content(*(d->str), d->character)) {
+    if (d->character && d->str && *(d->str) && check_for_banned_content(*(d->str), d->character, MODERATION_MODE_DESCRIPTIONS)) {
       *(*(d->str)) = '\0';
       return;
     }
@@ -269,6 +271,9 @@ void string_add(struct descriptor_data *d, char *str)
     } else if (STATE(d) == CON_ART_CREATE && d->edit_mode == ART_EDIT_DESC) {
       REPLACE_STRING(d->edit_obj->photo);
       create_art_main_menu(d);
+    } else if (STATE(d) == CON_PET_CREATE && d->edit_mode == PET_EDIT_DESC) {
+      REPLACE_STRING(d->edit_obj->photo);
+      create_pet_main_menu(d);
     } else if (STATE(d) == CON_VEHCUST) {
       REPLACE_STRING(d->edit_veh->restring_long);
       vehcust_menu(d);
@@ -431,6 +436,17 @@ void string_add(struct descriptor_data *d, char *str)
         redit_disp_exit_menu(d);
         break;
       }
+    } else if (STATE(d) == CON_PC_EXDESC_EDIT) {
+      switch(d->edit_mode) {
+        case PC_EXDESC_EDIT_OLC_SET_DESC:
+          if ((d->str) && !detected_abort) {
+            format_string(d, DONT_FORMAT_INDENT);
+            d->edit_exdesc->set_desc(*d->str);
+            DELETE_D_STR_IF_EXTANT(d);
+          }
+          _pc_exdesc_edit_olc_menu(d);
+          break;
+      }
     } else if (STATE(d) == CON_QEDIT) {
       switch (d->edit_mode) {
         case QEDIT_INFO:
@@ -473,7 +489,7 @@ void string_add(struct descriptor_data *d, char *str)
         REPLACE_STRING(file->photo);
       }
       pocketsec_notemenu(d);
-    } else if (PLR_FLAGGED(d->character, PLR_MAILING)) {
+    } else if (d->character && PLR_FLAGGED(d->character, PLR_MAILING)) {
         if (!detected_abort) {
         store_mail(d->mail_to, d->character, *d->str);
         d->mail_to = 0;

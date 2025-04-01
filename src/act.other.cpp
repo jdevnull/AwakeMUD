@@ -42,6 +42,7 @@
 #include "moderation.hpp"
 #include "chipjacks.hpp"
 #include "player_exdescs.hpp"
+#include "gmcp.hpp"
 
 #ifdef GITHUB_INTEGRATION
 #include <curl/curl.h>
@@ -360,6 +361,10 @@ ACMD(do_title)
   skip_spaces(&argument);
   delete_doubledollar(argument);
 
+#ifdef IS_BUILDPORT
+  send_to_char("Titles are disabled on the buildport.\r\n", ch);
+  return;
+#else
   if (IS_NPC(ch))
     send_to_char("Your title is fine... go away.\r\n", ch);
   else if (PLR_FLAGGED(ch, PLR_NOTITLE))
@@ -373,11 +378,10 @@ ACMD(do_title)
   } else {
     skip_spaces(&argument);
     strlcat(argument, "^n", sizeof(buf));
-    set_title(ch, argument);
+    set_title(ch, argument, TRUE);
     send_to_char(ch, "Okay, you're now %s%s%s %s.\r\n", GET_PRETITLE(ch), GET_PRETITLE(ch) && *(GET_PRETITLE(ch)) ? " " : "", GET_CHAR_NAME(ch), GET_TITLE(ch));
-    snprintf(buf, sizeof(buf), "UPDATE pfiles SET Title='%s' WHERE idnum=%ld;", prepare_quotes(buf2, GET_TITLE(ch), sizeof(buf2) / sizeof(buf2[0])), GET_IDNUM(ch));
-    mysql_wrapper(mysql, buf);
   }
+#endif
 }
 
 int perform_group(struct char_data *ch, struct char_data *vict)
@@ -936,9 +940,10 @@ ACMD(do_gen_write)
 
   FAILURE_CASE(subcmd == SCMD_TYPO && (str_str(argument, "chernobyl") || str_str(argument, "chornobyl")), "Thanks for the report, but we use the Ukrainian spelling of Chornobyl here.");
 
-  snprintf(buf, sizeof(buf), "%s %s: %s", (ch->desc->original ? GET_CHAR_NAME(ch->desc->original) : GET_CHAR_NAME(ch)),
-          cmd_name, argument);
-  mudlog(buf, ch, LOG_MISCLOG, FALSE);
+  mudlog_vfprintf(ch, LOG_MISCLOG, "%s %s: %s",
+                  (ch->desc->original ? GET_CHAR_NAME(ch->desc->original) : GET_CHAR_NAME(ch)),
+                  cmd_name,
+                  argument);
 
   if (stat(filename, &fbuf) < 0) {
     perror("Error statting file");
@@ -1537,7 +1542,8 @@ ACMD(do_slowns)
 #define _SKILL_MODE_MAGICAL 5
 #define _SKILL_MODE_LANGUAGES 6
 #define _SKILL_MODE_NERPS 7
-#define _NUM_SKILL_MODES 8
+#define _SKILL_MODE_OTAKU 8
+#define _NUM_SKILL_MODES 9
 
 const char *_skill_modes[] = {
   "general skills",
@@ -1547,7 +1553,8 @@ const char *_skill_modes[] = {
   "decking skills",
   "magical skills",
   "languages",
-  "non-implemented (NERP) skills"
+  "non-implemented (NERP) skills",
+  "otaku skills"
 };
 
 void _send_alphabetized_skills_to_ch(struct char_data *ch, const char *arg, int mode) {
@@ -1557,7 +1564,7 @@ void _send_alphabetized_skills_to_ch(struct char_data *ch, const char *arg, int 
   for (int i = MIN_SKILLS; i < MAX_SKILLS; i++) {
     switch (mode) {
       case _SKILL_MODE_GENERAL:
-        if (SKILL_IS_LANGUAGE(i) || SKILL_IS_VEHICLE_RELATED(i) || SKILL_IS_DECKING(i) || SKILL_IS_MAGICAL(i) || SKILL_IS_NERPS(i) || SKILL_IS_COMBAT(i) || SKILL_IS_SOCIAL(i))
+        if (SKILL_IS_LANGUAGE(i) || SKILL_IS_VEHICLE_RELATED(i) || SKILL_IS_DECKING(i) || SKILL_IS_MAGICAL(i) || SKILL_IS_NERPS(i) || SKILL_IS_COMBAT(i) || SKILL_IS_SOCIAL(i) || SKILL_IS_OTAKU(i))
           continue;
         break;
       case _SKILL_MODE_VEHICLE_RELATED:
@@ -1586,6 +1593,10 @@ void _send_alphabetized_skills_to_ch(struct char_data *ch, const char *arg, int 
         break;
       case _SKILL_MODE_SOCIAL:
         if (!SKILL_IS_SOCIAL(i))
+          continue;
+        break;
+      case _SKILL_MODE_OTAKU:
+        if (!SKILL_IS_OTAKU(i))
           continue;
         break;
     }
@@ -1926,11 +1937,23 @@ ACMD(do_eject)
                       "%s is loaded with special ammo that isn't ready for players to collect yet.", CAP(GET_OBJ_NAME(weapon)));
 
   // Strip out the ammo and put it in your bullet pants, then destroy the mag.
+  int had_rounds = GET_MAGAZINE_AMMO_COUNT(magazine);
   update_bulletpants_ammo_quantity(ch, GET_MAGAZINE_BONDED_ATTACKTYPE(magazine), GET_MAGAZINE_AMMO_TYPE(magazine), GET_MAGAZINE_AMMO_COUNT(magazine));
   obj_from_obj(magazine);
   extract_obj(magazine);
-  act("$n ejects and pockets a magazine from $p.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_ROOM);
-  act("You eject and pocket a magazine from $p.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_CHAR);
+  magazine = NULL;
+  if (GET_WEAPON_MAX_AMMO(weapon) == 1 && GET_WEAPON_FIREMODE(weapon) == MODE_SS) {
+    if (had_rounds > 0) {
+      act("$n locks back the bolt on $p, catching and pocketing the round that pops out.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_ROOM);
+      act("You lock back the bolt on $p, catching and pocketing the round that pops out.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_CHAR);
+    } else {
+      act("$n locks back the bolt on $p, revealing an empty chamber.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_ROOM);
+      act("You lock back the bolt on $p, revealing an empty chamber.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_CHAR);
+    }
+  } else {
+    act("$n ejects and pockets a magazine from $p.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_ROOM);
+    act("You eject and pocket a magazine from $p.", FALSE, ch, GET_EQ(ch, WEAR_WIELD), NULL, TO_CHAR);
+  }
 
   // Ejecting a magazine costs a simple action.
   GET_INIT_ROLL(ch) -= 5;
@@ -2352,6 +2375,8 @@ ACMD(do_treat)
 
   // Treater gets a wait state.
   WAIT_STATE(ch, 2 RL_SEC);
+
+  SendGMCPCharVitals(vict); // Update State
 }
 
 ACMD(do_astral)
@@ -2607,6 +2632,8 @@ void cedit_disp_menu(struct descriptor_data *d, int mode)
 
         d->edit_mob->in_room = error_suppressor;
       }
+
+      send_to_char(CH, "A) Optional Extra Descriptions (^c%d^n/^c%d^n set)\r\n", GET_CHAR_EXDESCS(d->edit_mob).size(), GET_CHAR_MAX_EXDESCS(CH));
     }
   }
   if (mode)
@@ -2619,7 +2646,7 @@ void cedit_disp_menu(struct descriptor_data *d, int mode)
 
 void cedit_parse(struct descriptor_data *d, char *arg)
 {
-  if (check_for_banned_content(arg, CH)) {
+  if (check_for_banned_content(arg, CH, MODERATION_MODE_DESCRIPTIONS)) {
     cedit_disp_menu(d, 0);
     return;
   }
@@ -2632,7 +2659,7 @@ void cedit_parse(struct descriptor_data *d, char *arg)
     case 'y':
     case 'Y':
       d->edit_mob = Mem->GetCh();
-      d->edit_mob->player_specials = &dummy_mob;
+      d->edit_mob->player_specials = new player_special_data;
 
       // Copy over lifestyle-impacting information.
       GET_PRONOUNS(d->edit_mob) = GET_PRONOUNS(CH);
@@ -2652,6 +2679,7 @@ void cedit_parse(struct descriptor_data *d, char *arg)
         d->edit_mob->char_specials.arrive = str_dup(CH->char_specials.arrive);
         d->edit_mob->char_specials.leave = str_dup(CH->char_specials.leave);
         set_lifestyle_string(d->edit_mob, get_lifestyle_string(CH));
+        clone_exdesc_vector_to_edit_mob_for_editing(d);
       } else if (STATE(d) == CON_PCUSTOMIZE) {
         d->edit_mob->player.physical_text.keywords =
           str_dup(CH->player.matrix_text.keywords);
@@ -2738,6 +2766,8 @@ void cedit_parse(struct descriptor_data *d, char *arg)
 
         set_lifestyle_string(CH, get_lifestyle_string(d->edit_mob));
         snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), ", lifestyle_string='%s'", prepare_quotes(buf3, get_lifestyle_string(CH), sizeof(buf3) / sizeof(buf3[0])));
+
+        overwrite_pc_exdescs_with_edit_mob_exdescs_and_then_save_to_db(d);
       } else if (STATE(d) == CON_PCUSTOMIZE) {
         DELETE_ARRAY_IF_EXTANT(CH->player.matrix_text.keywords);
         CH->player.matrix_text.keywords = str_dup(GET_KEYWORDS(d->edit_mob));
@@ -2772,8 +2802,9 @@ void cedit_parse(struct descriptor_data *d, char *arg)
         snprintf(ENDOF(buf2), sizeof(buf2) - strlen(buf2), ", Astral_LookDesc='%s'", prepare_quotes(buf3, CH->player.astral_text.look_desc, sizeof(buf3) / sizeof(buf3[0])));
       }
 
-      if (d->edit_mob)
+      if (d->edit_mob) {
         Mem->DeleteCh(d->edit_mob);
+      }
 
       d->edit_mob = NULL;
       d->edit_mode = 0;
@@ -2889,6 +2920,18 @@ void cedit_parse(struct descriptor_data *d, char *arg)
       break;
     case '9':
       cedit_lifestyle_menu(d);
+      break;
+    case 'a':
+    case 'A':
+      {
+        if (GET_CHAR_MAX_EXDESCS(d->original ? d->original : d->character) <= 0) {
+          send_to_char(d->character, "You don't have the ability to set exdescs. You'll need to purchase them first, see HELP SYSPOINTS.\r\n");
+          return;
+        }
+        send_to_char("\r\nExtra descriptions are optional flair that you can add to your character's look description if desired.\r\n", CH);
+        pc_exdesc_edit_disp_main_menu(d);
+        STATE(d) = CON_PC_EXDESC_EDIT;
+      }
       break;
     default:
       cedit_disp_menu(d, 0);
@@ -3416,7 +3459,7 @@ bool process_single_boost(struct char_data *ch, int boost_attribute) {
   // If they have an active boost for this attribute, decrement it by one and test.
   if (BOOST(ch)[boost_attribute][0] > 0 && (--BOOST(ch)[boost_attribute][0]) == 0) {
     send_to_char(ch, msg);
-    if (power <= racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_NORMAL][boost_attribute])
+    if (power <= get_attr_max(ch, boost_attribute))
       damage = LIGHT;
     else if (power < racial_limits[(int)GET_RACE(ch)][RACIAL_LIMITS_150_PCT][boost_attribute])
       damage = MODERATE;
@@ -3460,6 +3503,8 @@ ACMD(do_assense)
   struct char_data *vict;
   struct obj_data *obj;
   struct remem *mem;
+  std::unordered_map<idnum_t, int>::const_iterator assense_recency_entry;
+
   if (!*argument) {
     send_to_char(ch, "Who's aura do you wish to assense?\r\n");
     return;
@@ -3472,7 +3517,23 @@ ACMD(do_assense)
     send_to_char(ch, "You don't see them here.\r\n");
     return;
   }
+
   int skill = GET_INT(ch), target = 4;
+
+  if (vict) {
+    // Check to see if we've hit our max tries. If we haven't, multiply the existing tries by 2 and add that to TN.
+    if (!IS_SENATOR(ch) && (assense_recency_entry = vict->assense_recency.find(GET_IDNUM(ch))) != vict->assense_recency.end() && assense_recency_entry->second > 0) {
+      FAILURE_CASE(assense_recency_entry->second >= GET_INT(ch), "You've assensed them too recently. Try again later.");
+
+      send_to_char("You squint harder, trying to see more than you already have...\r\n", ch);
+      target += assense_recency_entry->second * 2;
+
+      vict->assense_recency[GET_IDNUM(ch)] += 1;
+    } else {
+      vict->assense_recency[GET_IDNUM(ch)] = 1;
+    }
+  }
+
   if (GET_BACKGROUND_AURA(ch->in_room) == AURA_POWERSITE)
     skill += GET_BACKGROUND_COUNT(ch->in_room);
   else target += GET_BACKGROUND_COUNT(ch->in_room);
@@ -4669,169 +4730,6 @@ ACMD(do_tridlog)
   }
 }
 
-ACMD(do_spray)
-{
-  skip_spaces(&argument);
-  if (!*argument) {
-    send_to_char("What do you want to spray?\r\n", ch);
-    return;
-  }
-
-  // If they trigger automod with this, bail out.
-  if (check_for_banned_content(argument, ch))
-    return;
-
-  FAILURE_CASE(!ch->in_room, "You can't do that in a vehicle.");
-
-  {
-    int existing_graffiti_count = 0;
-    struct obj_data *obj;
-    FOR_ITEMS_AROUND_CH(ch, obj) {
-      if (OBJ_IS_GRAFFITI(obj))
-        existing_graffiti_count++;
-    }
-    if (existing_graffiti_count >= MAXIMUM_GRAFFITI_IN_ROOM) {
-      send_to_char("There's too much graffiti here, you can't find a spare place to paint!\r\n(OOC: You'll have to ##^WCLEANUP GRAFFITI^n before you can paint here.)\r\n", ch);
-      return;
-    }
-  }
-
-  for (struct obj_data *obj = ch->carrying; obj; obj = obj->next_content) {
-    if (GET_OBJ_SPEC(obj) && GET_OBJ_SPEC(obj) == spraypaint) {
-      int length = get_string_length_after_color_code_removal(argument, ch);
-
-      if (length >= LINE_LENGTH) {
-        send_to_char("There isn't that much paint in there.\r\n", ch);
-        return;
-      }
-
-      // If it's too short, check to make sure there's at least one space in it.
-      if (length < 10) {
-        const char *ptr = argument;
-        for (; *ptr; ptr++) {
-          if (*ptr == ' ')
-            break;
-        }
-        if (!*ptr) {
-          send_to_char(ch, "Please write out something to spray, like 'spray A coiling dragon mural'.\r\n");
-          return;
-        }
-      }
-
-      {
-        int alpha = 0, nonalpha = 0;
-        for (const char *ptr = argument; *ptr; ptr++) {
-          if (isalnum(*ptr)) {
-            alpha++;
-          } else if (*ptr != '^' && *ptr != '[' && *ptr != ']' && *ptr != ' ') {
-            nonalpha++;
-          }
-        }
-        if (nonalpha > 5 && (alpha / 4 < nonalpha)) {
-          send_to_char("ASCII art doesn't play well with screenreaders, please write things out!\r\n", ch);
-          return;
-        }
-      }
-
-      // Don't spam the same sprays.
-      if (ch->desc) {
-        if (!str_cmp(argument, ch->desc->last_sprayed)) {
-          send_to_char("For spam reduction reasons, you can't spray the same thing twice in a row.\r\n", ch);
-          return;
-        } else {
-          strlcpy(ch->desc->last_sprayed, argument, sizeof(ch->desc->last_sprayed));
-        }
-      }
-
-      struct obj_data *paint = read_object(OBJ_DYNAMIC_GRAFFITI, VIRTUAL, OBJ_LOAD_REASON_SPECPROC);
-      snprintf(buf, sizeof(buf), "a piece of graffiti that says \"%s^n\"", argument);
-      paint->restring = str_dup(buf);
-      snprintf(buf, sizeof(buf), "   ^n%s^n", argument);
-      paint->graffiti = str_dup(buf);
-      GET_GRAFFITI_SPRAYED_BY(paint) = GET_IDNUM_EVEN_IF_PROJECTING(ch);
-      obj_to_room(paint, ch->in_room);
-
-      send_to_char("You tag the area with your spray.\r\n", ch);
-      snprintf(buf, sizeof(buf), "[SPRAYLOG]: %s sprayed graffiti: %s.", GET_CHAR_NAME(ch), GET_OBJ_NAME(paint));
-      mudlog(buf, ch, LOG_MISCLOG, TRUE);
-
-      WAIT_STATE(ch, 3 RL_SEC);
-
-      if (++GET_OBJ_TIMER(obj) >= 3) {
-        send_to_char("The spray can is now empty, so you throw it away.\r\n", ch);
-        extract_obj(obj);
-      }
-      return;
-    }
-  }
-
-  send_to_char("You don't have anything to spray with.\r\n", ch);
-}
-
-ACMD(do_cleanup)
-{
-  skip_spaces(&argument);
-  if (!*argument) {
-    send_to_char("What do you want to clean up?\r\n", ch);
-    return;
-  }
-
-  struct char_data *tmp_char = NULL;
-  struct obj_data *target_obj = NULL;
-
-  generic_find(argument, FIND_OBJ_ROOM, ch, &tmp_char, &target_obj);
-
-  if (!target_obj) {
-    send_to_char(ch, "You don't see anything called '%s' here.\r\n", argument);
-    return;
-  }
-
-  if (!OBJ_IS_GRAFFITI(target_obj)) {
-    send_to_char(ch, "%s is not graffiti.\r\n", capitalize(GET_OBJ_NAME(target_obj)));
-    return;
-  }
-
-  if (ch_is_blocked_by_quest_protections(ch, target_obj, TRUE, TRUE)) {
-    send_to_char(ch, "%s isn't yours-- better leave it be.\r\n", capitalize(GET_OBJ_NAME(target_obj)));
-    return;
-  }
-
-  // If you're not a staff member, you need an item to clean it up.
-  if (!access_level(ch, LVL_BUILDER)) {
-    struct obj_data *cleaner = NULL;
-    for (cleaner = ch->carrying; cleaner; cleaner = cleaner->next_content) {
-      if (GET_OBJ_TYPE(cleaner) == ITEM_DRINKCON && GET_DRINKCON_LIQ_TYPE(cleaner) == LIQ_CLEANER && GET_DRINKCON_AMOUNT(cleaner) > 0) {
-        break;
-      }
-    }
-    if (!cleaner) {
-      send_to_char("You don't have any cleaning solution to remove the paint with.\r\n", ch);
-      return;
-    }
-
-    // Decrement contents.
-    if ((--GET_DRINKCON_AMOUNT(cleaner)) <= 0) {
-      send_to_char(ch, "You spray the last of the cleaner from %s over the graffiti.\r\n", decapitalize_a_an(GET_OBJ_NAME(cleaner)));
-    }
-  }
-
-  send_to_char(ch, "You spend a few moments scrubbing away at %s. Community service, good for you!\r\n", GET_OBJ_NAME(target_obj));
-  act("$n spends a few moments scrubbing away at $p.", TRUE, ch, target_obj, NULL, TO_ROOM);
-
-  WAIT_STATE(ch, 3 RL_SEC);
-
-  // Log it, but only if it's player-generated content.
-  if (GET_OBJ_VNUM(target_obj) == OBJ_DYNAMIC_GRAFFITI) {
-    snprintf(buf, sizeof(buf), "[SPRAYLOG]: %s cleaned up graffiti: ^n%s^g.", GET_CHAR_NAME(ch), GET_OBJ_NAME(target_obj));
-    mudlog(buf, ch, LOG_MISCLOG, TRUE);
-  }
-
-  if (COULD_BE_ON_QUEST(ch))
-    check_quest_destroy(ch, target_obj);
-
-  extract_obj(target_obj);
-}
-
 ACMD(do_costtime)
 {
   if (*argument)
@@ -4914,16 +4812,19 @@ ACMD(do_syspoints) {
   // Morts can only view their own system points.
   if (!access_level(ch, LVL_CONSPIRATOR)) {
     if (!*argument) {
-      send_to_char(ch, "You have %d system point%s. See ^WHELP SYSPOINTS^n for how to use them.\r\n",
+      send_to_char(ch, "You have ^c%d^n system point%s. See ^WHELP SYSPOINTS^n for how to use them.\r\n",
                     GET_SYSTEM_POINTS(ch),
                     GET_SYSTEM_POINTS(ch) == 1 ? "" : "s"
                   );
-      send_to_char(ch, " - You %s^n purchased NODELETE.\r\n", PLR_FLAGGED(ch, PLR_NODELETE) ? "^ghave" : "^yhave not yet");
-      send_to_char(ch, " - You %s^n purchased the ability to see ROLLS output.\r\n", PLR_FLAGGED(ch, PLR_PAID_FOR_ROLLS) ? "^ghave" : "^yhave not yet");
-      send_to_char(ch, " - You %s^n purchased the ability to see VNUMS in your prompt.\r\n", PLR_FLAGGED(ch, PLR_PAID_FOR_VNUMS) ? "^ghave" : "^yhave not yet");
-#ifdef PLAYER_EXDESCS
-      send_to_char(ch, " - You have purchased %d EXDESC slots.\r\n", get_exdesc_max(ch));
-#endif
+      send_to_char(ch, " - You %s^n purchased ^WNODELETE^n.\r\n", PLR_FLAGGED(ch, PLR_NODELETE) ? "^ghave" : "^yhave not yet");
+      send_to_char(ch, " - You %s^n purchased the ability to see ^WROLLS^n output.\r\n", PLR_FLAGGED(ch, PLR_PAID_FOR_ROLLS) ? "^ghave" : "^yhave not yet");
+      send_to_char(ch, " - You %s^n purchased the ability to see ^WVNUMS^n in your prompt.\r\n", PLR_FLAGGED(ch, PLR_PAID_FOR_VNUMS) ? "^ghave" : "^yhave not yet");
+
+      if (GET_CHAR_MAX_EXDESCS(ch) <= 2) {
+        send_to_char(" - You ^yhave not yet^n purchased any ^WEXDESC^n slots beyond the default 2.\r\n", ch);
+      } else {
+        send_to_char(ch, " - You have purchased ^g%d^n ^WEXDESC^n slots for a total of ^g%d^n.\r\n", GET_CHAR_MAX_EXDESCS(ch) - 2, GET_CHAR_MAX_EXDESCS(ch));
+      }
       return;
     }
 
@@ -5194,12 +5095,10 @@ ACMD(do_syspoints) {
 #undef ANALYZE_COST
     }
 
-#ifdef PLAYER_EXDESCS
     if (is_abbrev(arg, "exdescs") || is_abbrev(arg, "extra descriptions")) {
       syspoints_purchase_exdescs(ch, buf, FALSE);
       return;
     }
-#endif
 
     send_to_char(ch, "'%s' is not a valid mode. See ^WHELP SYSPOINTS^n for command syntax.\r\n", arg);
     return;

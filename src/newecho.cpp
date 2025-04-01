@@ -707,6 +707,8 @@ void send_echo_to_char(struct char_data *actor, struct char_data *viewer, const 
 
 ACMD(do_new_echo) {
   char storage_buf[MAX_INPUT_LENGTH * 2 + 1];
+  memset(storage_buf, 0, sizeof(storage_buf));
+  
   struct veh_data *veh = NULL;
 
   struct room_data *in_room = ch->in_room;
@@ -732,7 +734,7 @@ ACMD(do_new_echo) {
   FAILURE_CASE(!*argument, "Yes... but what?\r\n");
 
   // If they trigger automod with this, bail out.
-  if (check_for_banned_content(buf2, ch)) {
+  if (check_for_banned_content(argument, ch)) {
     NEW_ECHO_DEBUG("Bailed out: Banned content.");
     return;
   }

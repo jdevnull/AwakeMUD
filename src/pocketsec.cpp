@@ -327,6 +327,11 @@ void pocketsec_parse(struct descriptor_data *d, char *arg)
       }
 
       i = atoi(arg);
+      if (i <= 0) {
+        pocketsec_phonemenu(d);
+        send_to_char("That entry does not exist.\r\n", CH);
+      }
+
       for (file = folder->contains; file && i > 1; file = file->next_content)
         i--;
       if (file) {
@@ -376,19 +381,21 @@ void pocketsec_parse(struct descriptor_data *d, char *arg)
         folder = generate_pocket_secretary_folder(SEC, POCSEC_FOLDER_PHONEBOOK);
       }
 
-      if (arg && *arg == '*') {
-        struct obj_data *next;
-        for (file = folder->contains; file; file = next) {
-          next = file->next_content;
-          extract_obj(file);
+      if (arg && *arg) {
+        if (*arg == '*') {
+          struct obj_data *next;
+          for (file = folder->contains; file; file = next) {
+            next = file->next_content;
+            extract_obj(file);
+          }
+          folder->contains = NULL;
+        } else {
+          i = atoi(arg);
+          for (file = folder->contains; file && i > 1; file = file->next_content)
+            i--;
+          if (file)
+            extract_obj(file);
         }
-        folder->contains = NULL;
-      } else {
-        i = atoi(arg);
-        for (file = folder->contains; file && i > 1; file = file->next_content)
-          i--;
-        if (file)
-          extract_obj(file);
       }
       pocketsec_phonemenu(d);
       break;

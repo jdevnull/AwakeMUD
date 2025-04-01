@@ -29,6 +29,7 @@
 #include "quest.hpp"
 #include "zoomies.hpp"
 #include "elevators.hpp"
+#include "gmcp.hpp"
 
 /* external functs */
 int special(struct char_data * ch, int cmd, char *arg);
@@ -1042,6 +1043,7 @@ int perform_move(struct char_data *ch, int dir, int extra, struct char_data *vic
   }
 
   FALSE_CASE(GET_POS(ch) < POS_FIGHTING || (AFF_FLAGGED(ch, AFF_PRONE) && !IS_NPC(ch)), "Maybe you should get on your feet first?");
+  FALSE_CASE(PLR_FLAGGED(ch, PLR_MATRIX), "It will be difficult to do that while tethered to the matrix."); // This is for hitchers, primarily
 
   if (GET_POS(ch) >= POS_FIGHTING && FIGHTING(ch)) {
     WAIT_STATE(ch, PULSE_VIOLENCE * 2);
@@ -1201,6 +1203,8 @@ int perform_move(struct char_data *ch, int dir, int extra, struct char_data *vic
       perform_move(k->follower, dir, CHECK_SPECIAL, NULL);
     }
   }
+
+  SendGMCPRoomInfo(ch, ch->in_room);
   return 1;
 }
 
@@ -1740,7 +1744,10 @@ void enter_veh(struct char_data *ch, struct veh_data *found_veh, const char *arg
   if (found_veh->owner > 0 || found_veh->locked) {
     bool is_staff = access_level(ch, LVL_CONSPIRATOR);
     bool is_owner = GET_IDNUM_EVEN_IF_PROJECTING(ch) == found_veh->owner;
-    bool is_following_owner = (ch->master && GET_IDNUM(ch->master) == found_veh->owner && AFF_FLAGGED(ch, AFF_GROUP)); // todo: make this grouped with (owner can follow you)
+    bool is_following_owner = (ch->master && GET_IDNUM(ch->master) == found_veh->owner);
+#ifdef MUST_GROUP_BEFORE_ENTERING_VEHICLE
+    is_following_owner &= AFF_FLAGGED(ch, AFF_GROUP);   // todo: make this grouped with (owner can follow you)
+#endif
     bool owner_is_remote_rigging = found_veh->rigger && GET_IDNUM(found_veh->rigger);
     bool owner_is_driving = FALSE;
 
@@ -1751,16 +1758,19 @@ void enter_veh(struct char_data *ch, struct veh_data *found_veh, const char *arg
       }
     }
 
-    if (!is_owner && !is_following_owner && (found_veh->locked || (!owner_is_remote_rigging && !owner_is_driving))) {
+    if (ch->desc && !is_owner && !is_following_owner && (found_veh->locked || (!owner_is_remote_rigging && !owner_is_driving))) {
       if (is_staff) {
         send_to_char("You staff-override the fact that the owner isn't explicitly letting you in.\r\n", ch);
       } else {
         // This error message kinda sucks to write.
         if (!ch->master || GET_IDNUM(ch->master) != found_veh->owner) {
           send_to_char(ch, "You need to be following the owner to enter %s.\r\n", GET_VEH_NAME(found_veh));
-        } else if (!AFF_FLAGGED(ch, AFF_GROUP)) {
+        }
+#ifdef MUST_GROUP_BEFORE_ENTERING_VEHICLE
+        else if (!AFF_FLAGGED(ch, AFF_GROUP)) {
           send_to_char(ch, "The owner needs to group you before you can enter %s.\r\n", GET_VEH_NAME(found_veh));
         }
+#endif
         return;
       }
     }
@@ -1768,13 +1778,15 @@ void enter_veh(struct char_data *ch, struct veh_data *found_veh, const char *arg
 #endif
 
   if (inveh && (AFF_FLAGGED(ch, AFF_PILOT) || PLR_FLAGGED(ch, PLR_REMOTE))) {
+    int required_load = calculate_vehicle_entry_load(inveh);
+    int available_load = found_veh->load - found_veh->usedload;
 
     if (inveh->in_veh)
       send_to_char("You are already inside a vehicle.\r\n", ch);
     else if (inveh == found_veh)
       send_to_char("It'll take a smarter mind than yours to figure out how to park your vehicle inside itself.\r\n", ch);
-    else if (found_veh->load - found_veh->usedload < calculate_vehicle_entry_load(inveh))
-      send_to_char("There is not enough room in there for that.\r\n", ch);
+    else if (available_load < required_load)
+      send_to_char(ch, "There is not enough room in there for that-- only %d load units are free, and you need %d.\r\n", available_load, required_load);
     else {
       strlcpy(buf3, GET_VEH_NAME(inveh), sizeof(buf3));
       snprintf(buf, sizeof(buf), "%s drives into the back of %s.", buf3, GET_VEH_NAME(found_veh));

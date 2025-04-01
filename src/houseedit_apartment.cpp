@@ -499,8 +499,10 @@ void houseedit_apartment_parse(struct descriptor_data *d, const char *arg) {
       houseedit_display_apartment_edit_menu(d);
       break;
     case HOUSEEDIT_APARTMENT_LIFESTYLE:
-      if (parsed_int != -1 && (parsed_int < COMPLEX->get_lifestyle() || parsed_int >= NUM_LIFESTYLES)) {
-        send_to_char(CH, "That's not a valid lifestyle. Enter a lifestyle number between %d and %d, or -1 to use the complex's lifestyle: ", COMPLEX->get_lifestyle(), NUM_LIFESTYLES - 1);
+// #define LOWEST_ACCEPTABLE_LIFESTYLE COMPLEX->get_lifestyle()
+#define LOWEST_ACCEPTABLE_LIFESTYLE LIFESTYLE_STREETS
+      if (parsed_int != -1 && (parsed_int < LOWEST_ACCEPTABLE_LIFESTYLE || parsed_int >= NUM_LIFESTYLES)) {
+        send_to_char(CH, "That's not a valid lifestyle. Enter a lifestyle number between %d and %d, or -1 to use the complex's lifestyle: ", LOWEST_ACCEPTABLE_LIFESTYLE, NUM_LIFESTYLES - 1);
         return;
       }
 
@@ -600,8 +602,8 @@ void houseedit_apartment_parse(struct descriptor_data *d, const char *arg) {
           send_to_char(CH, "%ld is not part of any zone.\r\n", vnum);
         } else if (!can_edit_zone(CH, real_zonenum)) {
           send_to_char(CH, "Sorry, you don't have access to edit zone %d.\r\n", zone_table[(real_zonenum)].number);
-        } else if (zone_table[(real_zonenum)].connected && !(access_level(CH, LVL_EXECUTIVE) || PLR_FLAGGED(CH, PLR_EDCON))) {
-          send_to_char(CH, "Sorry, zone %d is marked as connected to the game world, so you can't edit it.\r\n", zone_table[(real_zonenum)].number);
+        } else if (zone_table[(real_zonenum)].editing_restricted_to_admin && !(access_level(CH, LVL_ADMIN) || PLR_FLAGGED(CH, PLR_EDCON))) {
+          send_to_char(CH, "Sorry, zone %d is locked to editing.\r\n", zone_table[(real_zonenum)].number);
         }
         // They have edit permissions, so we can go ahead and add it.
         else {

@@ -1349,7 +1349,7 @@ enum {
 #define ITEM_CREATIVE_EFFORT    49
 #define ITEM_PET                50
 #define ITEM_COMPLEX_FORM       51       /* otaku complex form               */
-#define ITEM_DRONEWAR_RELATED   52
+#define ITEM_MINIGAME_RELATED   52
 #define NUM_ITEMS               53
 // Adding something? Add convenience definees to utils.hpp and put the type's name in constants.cpp.
 
@@ -1404,7 +1404,7 @@ enum {
 #define ITEM_EXTRA_NORENT             2     /* Item cannot be rented        */
 #define ITEM_EXTRA_NODONATE           3     /* Item cannot be donated       */
 // unused, must remove, was !invis    4, also touch db.cpp item_extra_flag_map
-// unused, must remove, was invisible 5, also touch db.cpp item_extra_flag_map
+#define ITEM_EXTRA_SHEER              5
 #define ITEM_EXTRA_MAGIC              6     /* Item is magical              */
 #define ITEM_EXTRA_NODROP             7     /* Item is cursed: can't drop   */
 #define ITEM_EXTRA_FORMFIT            8     /* Item is blessed              */

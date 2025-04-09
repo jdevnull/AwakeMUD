@@ -1668,6 +1668,38 @@ bool matrix_interpreter(struct char_data * ch, char *argument, char *line, comma
   return FALSE;
 }
 
+char *condense_repeated_characters(char *argument) {
+  char last_seen_char = 1;
+  int last_seen_count = 0;
+
+  if (!argument || !*argument)
+    return argument;
+
+  char *reader = argument;
+  char *writer = argument;
+
+  while (true) {
+    if (*reader == last_seen_char) {
+      // Skip anything that's been repeated more than 3 times, unless it's a digit.
+      if (++last_seen_count > 3 && !isdigit(*reader)) {
+        reader++;
+        continue;
+      } else {
+        *writer++ = *reader;
+      }
+    } else {
+      *writer++ = *reader;
+      last_seen_char = *reader;
+      last_seen_count = 1;
+    }
+
+    if (*(reader++) == '\0')
+      break;
+  }
+
+  return argument;
+}
+
 /*
  * This is the actual command interpreter called from game_loop() in comm.c
  * It makes sure you are the proper level and position to execute the command,
@@ -1697,6 +1729,9 @@ void command_interpreter(struct char_data * ch, char *argument, const char *tcna
   // They entered something? KaVir's protocol snippet says to clear their WriteOOB.
   if (ch->desc)
     ch->desc->pProtocol->WriteOOB = 0;
+
+  // Strip out massively repeated characters.
+  argument = condense_repeated_characters(argument);
 
 #ifdef LOG_COMMANDS
   log_command(ch, argument, tcname);
@@ -2181,7 +2216,7 @@ int search_block(const char *arg, const char **list, bool exact)
   if (!strcmp(arg, "!"))
     return -1;
 
-  char mutable_arg[strlen(arg) + 1];
+  char mutable_arg[MAX_INPUT_LENGTH + 1];
   strlcpy(mutable_arg, arg, sizeof(mutable_arg));
 
   /* Make into lower case, and get length of string */
@@ -3230,9 +3265,8 @@ void nanny(struct descriptor_data * d, char *arg)
           STATE(d) = CON_CLOSE;
           return;
         }
-        size_t char_name_sz = strlen(GET_CHAR_NAME(d->character))+1;
-        char char_name[char_name_sz];
-        strlcpy(char_name, GET_CHAR_NAME(d->character), char_name_sz);
+        char char_name[MAX_INPUT_LENGTH + 1];
+        strlcpy(char_name, GET_CHAR_NAME(d->character), sizeof(char_name));
         extract_char(d->character, FALSE);
 
         d->character = playerDB.LoadChar(char_name, false, PC_LOAD_REASON_MAIN_MENU_1);
@@ -3624,7 +3658,7 @@ void log_command(struct char_data *ch, const char *argument, const char *tcname)
     "look", "scan", "probe", "alias", "help",
     "progress", "time",
     "skills", "powers", "spells",
-    "list", "info", "recap",
+    "list", "info", "recap", "balance",
     "\n" // this MUST be last
   };
   const char *discard_commands[] = {
@@ -3646,7 +3680,7 @@ void log_command(struct char_data *ch, const char *argument, const char *tcname)
       return;
 
   // If they haven't earned additional scrutiny, skip common spammy commands as well.
-  if (!PLR_FLAGGED(ch, PLR_ADDITIONAL_SCRUTINY)) {
+  if (GET_LEVEL(ch) <= LVL_MORTAL && !PLR_FLAGGED(ch, PLR_ADDITIONAL_SCRUTINY)) {
     for (int i = 0; *discard_commands[i] != '\n'; i++)
       if (str_str(discard_commands[i], argument))
         return;

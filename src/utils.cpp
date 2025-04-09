@@ -24,6 +24,7 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <mysql/mysql.h>
+#include <regex>
 
 #if defined(WIN32) && !defined(__CYGWIN__)
 #include <winsock.h>
@@ -1080,6 +1081,8 @@ void mudlog(const char *str, struct char_data *ch, int log, bool file)
           break;
         case LOG_PGROUPLOG:
           check_log = PRF_PGROUPLOG;
+          if (!access_level(tch, LVL_VICEPRES))
+            continue;
           break;
         case LOG_HELPLOG:
           check_log = PRF_HELPLOG;
@@ -1101,6 +1104,8 @@ void mudlog(const char *str, struct char_data *ch, int log, bool file)
           break;
         case LOG_MAILLOG:
           check_log = PRF_MAILLOG;
+          if (!access_level(tch, LVL_VICEPRES))
+            continue;
           break;
         default:
           char errbuf[500];
@@ -1250,6 +1255,11 @@ struct time_info_data mud_time_passed(time_t t2, time_t t1)
 
 bool access_level(struct char_data *ch, int level)
 {
+  if (!ch) {
+    mudlog_vfprintf(ch, LOG_SYSLOG, "SYSERR: Got NULL character to access_level(%s, %d)", GET_CHAR_NAME(ch), level);
+    return false;
+  }
+  
   ch = ch->desc && ch->desc->original ? ch->desc->original : ch;
 
   return (!IS_NPC(ch)
@@ -3134,7 +3144,7 @@ bool attach_attachment_to_weapon(struct obj_data *attachment, struct obj_data *w
   }
 
   // You can only attach things to guns.
-  if (GET_OBJ_TYPE(weapon) != ITEM_WEAPON || !IS_GUN(GET_WEAPON_ATTACK_TYPE(weapon))) {
+  if (GET_OBJ_TYPE(weapon) != ITEM_WEAPON || !WEAPON_IS_GUN(weapon)) {
     if (ch) {
       send_to_char(ch, "%s is not a gun.\r\n", CAP(GET_OBJ_NAME(weapon)));
     } else {
@@ -3350,7 +3360,7 @@ struct obj_data *unattach_attachment_from_weapon(int location, struct obj_data *
     return NULL;
   }
 
-  if (GET_OBJ_TYPE(weapon) != ITEM_WEAPON || !IS_GUN(GET_WEAPON_ATTACK_TYPE(weapon))) {
+  if (GET_OBJ_TYPE(weapon) != ITEM_WEAPON || !WEAPON_IS_GUN(weapon)) {
     if (ch) {
       send_to_char("You can only unattach accessories from weapons.\r\n", ch);
     } else {
@@ -4455,6 +4465,12 @@ char get_final_character_from_string(const char *str) {
   return 0;
 }
 
+const char *remove_final_punctuation(const char *str) {
+  static char replacement_buf[MAX_INPUT_LENGTH + 1] = {0};
+  strlcpy(replacement_buf, std::regex_replace(std::string(str), std::regex("\\.[^nN]?$"), "").c_str(), sizeof(replacement_buf));
+  return replacement_buf;
+}
+
 bool CAN_SEE(struct char_data *subj, struct char_data *obj) {
   struct room_data *subj_in_room = get_ch_in_room(subj);
   struct room_data *obj_in_room = get_ch_in_room(obj);
@@ -4631,10 +4647,7 @@ int get_armor_penalty_grade(struct char_data *ch) {
 }
 
 void handle_weapon_attachments(struct obj_data *obj) {
-  if (GET_OBJ_TYPE(obj) != ITEM_WEAPON)
-    return;
-
-  if (!IS_GUN(GET_WEAPON_ATTACK_TYPE(obj)))
+  if (GET_OBJ_TYPE(obj) != ITEM_WEAPON || !WEAPON_IS_GUN(obj))
     return;
 
   int real_obj;
@@ -4841,7 +4854,7 @@ bool item_should_be_treated_as_melee_weapon(struct obj_data *obj) {
     return FALSE;
 
   // It's a gun that has a magazine in it.
-  if (IS_GUN(GET_WEAPON_ATTACK_TYPE(obj)) && obj->contains)
+  if (WEAPON_IS_GUN(obj) && obj->contains)
     return FALSE;
 
   // It's a gun that has no magazine (it was EJECTed), or it's not a gun.
@@ -4858,7 +4871,7 @@ bool item_should_be_treated_as_ranged_weapon(struct obj_data *obj) {
     return FALSE;
 
   // It's not a gun, or it doesn't have a magazine.
-  if (!IS_GUN(GET_WEAPON_ATTACK_TYPE(obj)) || !obj->contains)
+  if (!WEAPON_IS_GUN(obj) || !obj->contains)
     return FALSE;
 
   // It's a gun that has a magazine in it.
@@ -8244,8 +8257,9 @@ void zero_out_magazine_counts(struct obj_data *obj, int max_ammo_remaining = 0) 
     return;
   }
 
-  if ((GET_OBJ_TYPE(obj) == ITEM_GUN_MAGAZINE) && (GET_MAGAZINE_AMMO_COUNT(obj) > max_ammo_remaining))
-    GET_MAGAZINE_AMMO_COUNT(obj) = max_ammo_remaining;
+  if ((GET_OBJ_TYPE(obj) == ITEM_GUN_MAGAZINE) && (GET_MAGAZINE_AMMO_COUNT(obj) > max_ammo_remaining)) {
+    GET_MAGAZINE_AMMO_COUNT(obj) = (GET_MAGAZINE_AMMO_TYPE(obj) == AMMO_AV ? 0 : max_ammo_remaining);
+  }
 
   for (struct obj_data *contained = obj->contains; contained; contained = contained->next_content) {
     zero_out_magazine_counts(contained, max_ammo_remaining);

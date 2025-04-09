@@ -197,6 +197,7 @@ extern int calculate_distance_between_rooms(vnum_t start_room_vnum, vnum_t targe
 void set_descriptor_canaries(struct descriptor_data *newd);
 extern void process_flying_vehicles();
 extern void cleanup_policy_tree();
+extern void save_all_pcs();
 
 extern void save_all_apartments_and_storage_rooms();
 
@@ -490,6 +491,12 @@ void init_game(int port)
   // Since game_loop() is an infinite loop until shutdown is triggered, this is only reached when the game is ready to close.
   log("Saving all apartments and storage rooms.");
   save_all_apartments_and_storage_rooms();
+
+  log("Saving all vehicles.");
+  save_vehicles(FALSE);
+
+  log("Saving all PCs.");
+  save_all_pcs();
 
   log("Closing all sockets.");
   while (descriptor_list)
@@ -870,13 +877,13 @@ void game_loop(int mother_desc)
           d->wait = 1;
           d->prompt_mode = 1;
 
-          if (d->str)                     /* writing boards, mail, etc.   */
+          if (d->str) {                    /* writing boards, mail, etc.   */
             string_add(d, comm);
-          else if (d->showstr_point)      /* reading something w/ pager   */
+          } else if (d->showstr_point) {     /* reading something w/ pager   */
             show_string(d, comm);
-          else if (d->connected != CON_PLAYING)   /* in menus, etc.       */
+          } else if (d->connected != CON_PLAYING) {  /* in menus, etc.       */
             nanny(d, comm);
-          else {                          /* else: we're playing normally */
+          } else {                          /* else: we're playing normally */
             if (aliased) /* to prevent recursive aliases */
               d->prompt_mode = 0;
             else {
@@ -1319,8 +1326,10 @@ void keepalive(struct descriptor_data *d) {
     (char) 0
   };
 
-  if (write_to_descriptor(d->descriptor, keepalive) < 0) {
-    mudlog("SYSERR: Failed to write keepalive data to descriptor.", d->character, LOG_SYSLOG, TRUE);
+  int status_code;
+
+  if ((status_code = write_to_descriptor(d->descriptor, keepalive)) < 0) {
+    mudlog_vfprintf(d->character, LOG_SYSLOG, "SYSERR: Failed to write keepalive data to descriptor (status code %d).", status_code);
   }
 }
 
@@ -1397,7 +1406,7 @@ int make_prompt(struct descriptor_data * d)
             case 'A':
               if (GET_EQ(d->character, WEAR_WIELD)) {
 
-                if (IS_GUN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD), 3)))
+                if (WEAPON_IS_GUN(GET_EQ(d->character, WEAR_WIELD)))
                   switch (GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD), 11)) {
                     case MODE_SS:
                       snprintf(str, sizeof(str), "SS");
@@ -1456,8 +1465,7 @@ int make_prompt(struct descriptor_data * d)
               snprintf(str, sizeof(str), "%d", GET_DRAIN(d->character));
               break;
             case 'g':       // current ammo
-              if (GET_EQ(d->character, WEAR_WIELD) &&
-                  IS_GUN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD), 3)))
+              if (GET_EQ(d->character, WEAR_WIELD) && WEAPON_IS_GUN(GET_EQ(d->character, WEAR_WIELD)))
                 if (GET_EQ(d->character, WEAR_WIELD)->contains) {
                   snprintf(str, sizeof(str), "%d", MIN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD), 5),
                                          GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD)->contains, 9)));
@@ -1467,8 +1475,7 @@ int make_prompt(struct descriptor_data * d)
                   snprintf(str, sizeof(str), "0");
               break;
             case 'G':       // max ammo
-              if (GET_EQ(d->character, WEAR_WIELD) &&
-                  IS_GUN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD), 3)))
+              if (GET_EQ(d->character, WEAR_WIELD) && WEAPON_IS_GUN(GET_EQ(d->character, WEAR_WIELD)))
                 snprintf(str, sizeof(str), "%d", GET_OBJ_VAL(GET_EQ(d->character, WEAR_WIELD), 5));
               else
                 snprintf(str, sizeof(str), "0");
@@ -1578,8 +1585,7 @@ int make_prompt(struct descriptor_data * d)
                 snprintf(str, sizeof(str), "NA");
               break;
             case 's':       // current ammo
-              if (GET_EQ(d->character, WEAR_HOLD) &&
-                  IS_GUN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_HOLD), 3)))
+              if (GET_EQ(d->character, WEAR_HOLD) && WEAPON_IS_GUN(GET_EQ(d->character, WEAR_HOLD)))
                 if (GET_EQ(d->character, WEAR_HOLD)->contains) {
                   snprintf(str, sizeof(str), "%d", MIN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_HOLD), 5),
                                          GET_OBJ_VAL(GET_EQ(d->character, WEAR_HOLD)->contains, 9)));
@@ -1589,8 +1595,7 @@ int make_prompt(struct descriptor_data * d)
                   snprintf(str, sizeof(str), "0");
               break;
             case 'S':       // max ammo
-              if (GET_EQ(d->character, WEAR_HOLD) &&
-                  IS_GUN(GET_OBJ_VAL(GET_EQ(d->character, WEAR_HOLD), 3)))
+              if (GET_EQ(d->character, WEAR_HOLD) && WEAPON_IS_GUN(GET_EQ(d->character, WEAR_HOLD)))
                 snprintf(str, sizeof(str), "%d", GET_OBJ_VAL(GET_EQ(d->character, WEAR_HOLD), 5));
               else
                 snprintf(str, sizeof(str), "0");

@@ -1282,11 +1282,13 @@ static bool save_char(char_data *player, DBIndex::vnum_t loadroom, bool fromCopy
       }
     }
 
-    if (!has_any_item) {
+#ifdef TRY_TO_SAVE_GEAR_FROM_THAT_ONE_BUG_THAT_I_THINK_I_FIXED_ALREADY_ANYWAYS
+    if (!has_any_item && !PLR_FLAGGED(player, PLR_JUST_DIED)) {
       // Friendly notice: If you're reading this and going "oh hey, I could use this to drop all my stuff and quit to dupe my gear!" etc, that's code abuse and will result in a purge and ban. As you can see, it's logged ;)
       mudlog_vfprintf(player, LOG_SYSLOG, "SYSERR: Got completely nude character to save_char(). Refusing to save them under the assumption that this is a stripped char from that untraced bug that sometimes destroys gear.\r\n");
       return false;
     }
+#endif
   }
 
   MYSQL_RES *res;
@@ -2471,7 +2473,7 @@ void idle_delete()
   char buf[MAX_STRING_LENGTH];
 
   MYSQL *mysqlextra = mysql_init(NULL);
-  if (!mysql_real_connect(mysqlextra, mysql_host, mysql_user, mysql_password, mysql_db, 0, NULL, 0)) {
+  if (!mysql_real_connect(mysqlextra, mysql_host, mysql_user, mysql_password, mysql_db, GAME_MYSQL_PORT, NULL, 0)) {
     log("IDLEDELETE- Could not open extra socket, aborting");
     return;
   }
@@ -2647,7 +2649,7 @@ void auto_repair_obj(struct obj_data *obj, idnum_t owner) {
         FORCE_PROTO_VALUE("weapon", GET_WEAPON_ATTACK_TYPE_SETTABLE(obj), GET_WEAPON_ATTACK_TYPE_SETTABLE(&obj_proto[rnum]));
         FORCE_PROTO_VALUE("weapon", GET_WEAPON_SKILL(obj), GET_WEAPON_SKILL(&obj_proto[rnum]));
 
-        if (IS_GUN(GET_WEAPON_ATTACK_TYPE(obj))) {
+        if (WEAPON_IS_GUN(obj)) {
           FORCE_PROTO_VALUE("weapon", GET_WEAPON_MAX_AMMO(obj), GET_WEAPON_MAX_AMMO(&obj_proto[rnum]));
           FORCE_PROTO_VALUE("weapon", GET_WEAPON_POSSIBLE_FIREMODES(obj), GET_WEAPON_POSSIBLE_FIREMODES(&obj_proto[rnum]));
           FORCE_PROTO_VALUE("weapon", GET_WEAPON_INTEGRAL_RECOIL_COMP(obj), GET_WEAPON_INTEGRAL_RECOIL_COMP(&obj_proto[rnum]));
@@ -3399,6 +3401,21 @@ void remove_db_tag(idnum_t idnum, const char *tag_name) {
            prepare_quotes(prepare_quotes_buf, tag_name, sizeof(prepare_quotes_buf) / sizeof(prepare_quotes_buf[0])));
   
   mysql_wrapper(mysql, query_buf);
+}
+
+void save_all_pcs() {
+  for (struct descriptor_data *d = descriptor_list; d; d = d->next) {
+    if (d->character && !IS_NPC(d->character)) {
+      log_vfprintf("Saving %s (%ld).", GET_CHAR_NAME(d->character), GET_IDNUM(d->character));
+      save_char(d->character, GET_LOADROOM(d->character));
+    }
+
+    if (d->original && !IS_NPC(d->original)) {
+      log_vfprintf("Saving %s (%ld).", GET_CHAR_NAME(d->original), GET_IDNUM(d->original));
+      save_char(d->original, GET_LOADROOM(d->original));
+    }
+  }
+  log("Finished saving all PCs.");
 }
 
 void recalculate_character_magic_rating(struct char_data *ch) {

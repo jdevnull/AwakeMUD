@@ -303,7 +303,7 @@ void initialize_and_connect_to_mysql() {
   mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
 
   // Perform the actual connection.
-  if (!mysql_real_connect(mysql, mysql_host, mysql_user, mysql_password, mysql_db, 0, NULL, 0)) {
+  if (!mysql_real_connect(mysql, mysql_host, mysql_user, mysql_password, mysql_db, GAME_MYSQL_PORT, NULL, 0)) {
     snprintf(buf, sizeof(buf), "FATAL ERROR: %s\r\n", mysql_error(mysql));
     log(buf);
     log("Suggestion: Make sure your DB is running and that you've specified your connection info in src/mysql_config.cpp.\r\n");
@@ -3152,6 +3152,37 @@ int vnum_mobile_affflag(int i, struct char_data * ch)
   return (found);
 }
 
+int vnum_mobile_attribute(char *attrname, struct char_data *ch) {
+  int found = 0;
+
+  // Identify the flag.
+  int attr = search_block(attrname, attributes, FALSE);
+
+  if (attr >= NUM_ATTRIBUTES || attr < 0) {
+    send_to_char(ch, "'%s' is not a valid attribute. Choices are:\r\n", attributes);
+    for (attr = 0; attr < NUM_ATTRIBUTES; attr++) {
+      send_to_char(ch, "%s%s%s", attr == 0 ? "" : ", ", attributes[attr], attr == NUM_ATTRIBUTES - 1 ? "\r\n" : "");
+    }
+    return 0;
+  }
+
+  send_to_char(ch, "Mobs sorted by %s:\r\n", attributes[attr]);
+
+  for (int current = 50; current > 0; current--) {
+    for (rnum_t nr = 0; nr <= top_of_mobt; nr++) {
+      if (GET_ATT(&mob_proto[nr], attr) == current || (current == 50 && GET_ATT(&mob_proto[nr], attr) > current)) {
+        send_to_char(ch, "[%5ld] %s^n: %d\r\n",
+                     MOB_VNUM_RNUM(nr),
+                     mob_proto[nr].player.physical_text.name,
+                     GET_ATT(&mob_proto[nr], attr));
+        found++;
+      }
+    }
+  }
+  
+  return (found);
+}
+
 int vnum_vehicles_by_attribute(int vaff_idx, struct char_data *ch) {
   send_to_char(ch, "Displaying all vehicle prototypes sorted by %s (descending):\r\n", veh_aff[vaff_idx]);
 
@@ -3508,6 +3539,8 @@ int vnum_mobile(char *searchname, struct char_data * ch)
     return vnum_mobile_valuedeath(searchname,ch);
   if (!strcmp(arg1,"affflag"))
     return vnum_mobile_affflag(atoi(arg2),ch);
+  if (!strcmp(arg1,"attribute"))
+    return vnum_mobile_attribute(searchname,ch);
   for (nr = 0; nr <= top_of_mobt; nr++)
   {
     bool is_keyword = isname(searchname, get_string_after_color_code_removal(mob_proto[nr].player.physical_text.keywords, NULL));
@@ -3539,7 +3572,7 @@ int vnum_object_weapons(char *searchname, struct char_data * ch)
         for (nr = 0; nr <= top_of_objt; nr++) {
           if (GET_OBJ_TYPE(&obj_proto[nr]) != ITEM_WEAPON)
             continue;
-          if (!IS_GUN(GET_WEAPON_ATTACK_TYPE(&obj_proto[nr])))
+          if (!WEAPON_IS_GUN(&obj_proto[nr]))
             continue;
           if (GET_WEAPON_POWER(&obj_proto[nr]) < power && power != 0)
             continue;
@@ -3619,7 +3652,7 @@ int vnum_object_weapons_fa_pro(char *searchname, struct char_data * ch)
     for (nr = 0; nr <= top_of_objt; nr++) {
       if (GET_OBJ_TYPE(&obj_proto[nr]) != ITEM_WEAPON)
         continue;
-      if (!IS_GUN(GET_WEAPON_ATTACK_TYPE(&obj_proto[nr])))
+      if (!WEAPON_IS_GUN(&obj_proto[nr]))
         continue;
       if (GET_WEAPON_POWER(&obj_proto[nr]) < power && power != 0)
         continue;
@@ -3687,7 +3720,7 @@ int vnum_object_weapons_by_type(char *searchname, struct char_data * ch)
           found++;
           found_of_type++;
 
-          if (IS_GUN(GET_WEAPON_ATTACK_TYPE(weapon))) {
+          if (WEAPON_IS_GUN(weapon)) {
             snprintf(ENDOF(buf), sizeof(buf) - strlen(buf), "[%6ld :%3d] ^c%2d%s ^yIRC:%d^n %s (^W%s^n, ^c%d^n rounds, modes:^c%s%s%s%s^n%s)%s\r\n",
                     OBJ_VNUM_RNUM(nr),
                     ObjList.CountObj(nr),
@@ -4769,7 +4802,7 @@ void reset_zone(int zone, int reboot)
         }
 
         // Special case: Weapons for mounts. Note that this ignores current vehicle load, mount size, etc.
-        else if (GET_OBJ_TYPE(obj) == ITEM_WEAPON && IS_GUN(GET_WEAPON_ATTACK_TYPE(obj))) {
+        else if (GET_OBJ_TYPE(obj) == ITEM_WEAPON && WEAPON_IS_GUN(obj)) {
           struct obj_data *mount = NULL;
 
           // Iterate through every mount on the vehicle.
@@ -4967,7 +5000,7 @@ void reset_zone(int zone, int reboot)
           if (GET_OBJ_TYPE(obj_to) == ITEM_HOLSTER) {
             GET_HOLSTER_READY_STATUS(obj_to) = 1;
 
-            if (GET_OBJ_TYPE(obj) == ITEM_WEAPON && IS_GUN(GET_WEAPON_ATTACK_TYPE(obj))) {
+            if (GET_OBJ_TYPE(obj) == ITEM_WEAPON && WEAPON_IS_GUN(obj)) {
               // If it's carried by an NPC, make sure it's loaded.
               if (GET_WEAPON_MAX_AMMO(obj) > 0) {
                 struct obj_data *outermost = obj;
@@ -5070,7 +5103,7 @@ void reset_zone(int zone, int reboot)
 
               // If it's a weapon, reload it.
               if (GET_OBJ_TYPE(obj) == ITEM_WEAPON
-                  && IS_GUN(GET_WEAPON_ATTACK_TYPE(obj))
+                  && WEAPON_IS_GUN(obj)
                   && GET_WEAPON_MAX_AMMO(obj) != -1) 
               {
                 // Reload from their ammo.
@@ -7851,7 +7884,6 @@ void initialize_and_alphabetize_item_extra_flags() {
   for (int idx = 0; idx < MAX_ITEM_EXTRA; idx++) {
     switch(idx) {
       case 4:
-      case 5:
       case 14:
       case 22:
         continue;

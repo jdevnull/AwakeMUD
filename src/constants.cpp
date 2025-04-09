@@ -1001,6 +1001,51 @@ const char *where[] =
     "\n"
   };
 
+int worn_on_to_wearloc[] = {
+  ITEM_WEAR_TAKE, // light,
+  ITEM_WEAR_HEAD,
+  ITEM_WEAR_EYES,
+  ITEM_WEAR_EAR,
+  ITEM_WEAR_EAR,
+  ITEM_WEAR_FACE,
+  ITEM_WEAR_NECK,
+  ITEM_WEAR_NECK,
+  ITEM_WEAR_BACK,
+  ITEM_WEAR_ABOUT,
+  ITEM_WEAR_BODY,
+  ITEM_WEAR_UNDER,
+  ITEM_WEAR_ARMS,
+  ITEM_WEAR_ARM,
+  ITEM_WEAR_ARM,
+  ITEM_WEAR_WRIST,
+  ITEM_WEAR_WRIST,
+  ITEM_WEAR_HANDS,
+  ITEM_WEAR_WIELD,
+  ITEM_WEAR_HOLD,
+  ITEM_WEAR_SHIELD,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_FINGER,
+  ITEM_WEAR_BELLY,
+  ITEM_WEAR_WAIST,
+  ITEM_WEAR_THIGH,
+  ITEM_WEAR_THIGH,
+  ITEM_WEAR_LEGS,
+  ITEM_WEAR_ANKLE,
+  ITEM_WEAR_ANKLE,
+  ITEM_WEAR_SOCK,
+  ITEM_WEAR_FEET,
+  ITEM_WEAR_TAKE, // patch
+  ITEM_WEAR_UNDERWEAR,
+  ITEM_WEAR_CHEST,
+  ITEM_WEAR_LAPEL
+};
+
 
 const char *hands[] =
   {
@@ -1197,7 +1242,7 @@ const char *extra_bits[] =
     "!RENT",
     "!DONATE",
     "!INVIS",
-    "INVISIBLE",
+    "SHEER",
     "MAGIC",
     "!DROP",
     "FORMFIT",
@@ -1239,7 +1284,7 @@ const char *pc_readable_extra_bits[] =
     "Doesn't Save",
     "Can't be Donated",
     "Can't be Made Invis",
-    "Invisible",
+    "Sheer (See-Through)",
     "Looks Magical when Perceiving",
     "Can't be Dropped",
     "Form-Fitting",

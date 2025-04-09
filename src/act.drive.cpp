@@ -1348,7 +1348,7 @@ ACMD(do_speed)
     DELETE_AND_NULL_ARRAY(GET_VEH_DEFPOS(veh));
   }
 
-  FAILURE_CASE(veh_can_traverse_air(veh) && i > 2, "Sorry, you can't accelerate aircraft faster than cruising speed.");
+  FAILURE_CASE(GET_VEH_VNUM(veh) != 8913 && veh_can_traverse_air(veh) && i > 2, "Sorry, you can't accelerate aircraft faster than cruising speed.");
 
   if (veh->hood) {
     send_to_char("You can't move with the hood up.\r\n", ch);
@@ -2293,7 +2293,7 @@ ACMD(do_push)
     else if (ch->in_veh->cspeed > SPEED_IDLE)
       send_to_char("You are moving too fast to do that.\r\n", ch);
     else if (!(veh = get_veh_list(argument, ch->in_veh->carriedvehs, ch)))
-      send_to_char("That vehicle isn't in here.\r\n", ch);
+      send_to_char(ch, "You don't see a vehicle named '%s' to push %s into.\r\n", argument, GET_VEH_NAME(veh));
     else {
       strlcpy(buf3, GET_VEH_NAME(veh), sizeof(buf3));
       send_to_char(ch, "You push %s out of the back.\r\n", buf3);
@@ -2320,16 +2320,15 @@ ACMD(do_push)
       send_to_char("Push what?\r\n", ch);
       return;
     }
-    if (!(veh = get_veh_list(buf, ch->in_room->vehicles, ch)) || !(found_veh = get_veh_list(buf1, ch->in_room->vehicles, ch))) {
-      send_to_char("You don't see that vehicle here.\r\n", ch);
-      return;
-    }
 
-    FAILURE_CASE(found_veh == veh, "You can't push it into itself.");
-    FAILURE_CASE(!found_veh->seating[0] && !(repair_vehicle_seating(found_veh) && found_veh->seating[0]), "There's nowhere to push it into.");
-    FAILURE_CASE(found_veh->load - found_veh->usedload < calculate_vehicle_entry_load(veh), "There is not enough room in there for that.");
+    FAILURE_CASE_PRINTF(!(veh = get_veh_list(buf, ch->in_room->vehicles, ch)), "You don't see a vehicle named '%s' here.", buf);
+    FAILURE_CASE_PRINTF(!(found_veh = get_veh_list(buf1, ch->in_room->vehicles, ch)), "You don't see a vehicle named '%s' to push %s into.", buf1, GET_VEH_NAME(veh));
+
+    FAILURE_CASE_PRINTF(found_veh == veh, "You can't push %s into itself.", GET_VEH_NAME(veh));
+    FAILURE_CASE_PRINTF(!found_veh->seating[0] && !(repair_vehicle_seating(found_veh) && found_veh->seating[0]), "There's not enough seating for you in %s.", GET_VEH_NAME(found_veh));
+    FAILURE_CASE_PRINTF(found_veh->load - found_veh->usedload < calculate_vehicle_entry_load(veh), "There is not enough room in %s for that.", GET_VEH_NAME(found_veh));
     FAILURE_CASE(found_veh->locked, "You can't push it into a locked vehicle.");
-    FAILURE_CASE(veh->locked && veh->damage < VEH_DAM_THRESHOLD_DESTROYED, "The wheels seem to be locked.");
+    FAILURE_CASE_PRINTF(veh->locked && veh->damage < VEH_DAM_THRESHOLD_DESTROYED, "The wheels on %s seem to be locked.", GET_VEH_NAME(veh));
     FAILURE_CASE(found_veh->damage >= VEH_DAM_THRESHOLD_DESTROYED, "You can't push anything into a destroyed vehicle.");
 
     strlcpy(buf2, GET_VEH_NAME(veh), sizeof(buf2));
@@ -2452,6 +2451,29 @@ ACMD(do_vehicle_osay) {
   send_to_char(ch, "You say ^mOOCly^n, \"%s^n\".\r\n", capitalize(argument));
 }
 
+int get_vehicle_damage_modifier(struct veh_data *veh) {
+  switch (veh->damage)
+  {
+  case 0:
+    return 0;
+  case VEH_DAM_THRESHOLD_LIGHT:
+  case 2:
+    return 1;
+  case VEH_DAM_THRESHOLD_MODERATE:
+  case 4:
+  case 5:
+    return 2;
+  case VEH_DAM_THRESHOLD_SEVERE:
+  case 7:
+  case 8:
+  case 9:
+    return 3;
+  case 10:
+    return 10;
+  }
+  return 99;
+}
+
 int get_vehicle_modifier(struct veh_data *veh, bool include_weather)
 {
   struct char_data *ch;
@@ -2485,24 +2507,8 @@ int get_vehicle_modifier(struct veh_data *veh, bool include_weather)
     }
   }
   // Damaged? TN goes up.
-  switch (veh->damage)
-  {
-  case VEH_DAM_THRESHOLD_LIGHT:
-  case 2:
-    mod += 1;
-    break;
-  case VEH_DAM_THRESHOLD_MODERATE:
-  case 4:
-  case 5:
-    mod += 2;
-    break;
-  case VEH_DAM_THRESHOLD_SEVERE:
-  case 7:
-  case 8:
-  case 9:
-    mod += 3;
-    break;
-  }
+  mod += get_vehicle_damage_modifier(veh);
+
   // Weather makes it harder to drive too.
   if (include_weather && weather_info.sky >= SKY_RAINING)
     mod++;

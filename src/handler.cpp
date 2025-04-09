@@ -50,6 +50,7 @@ extern int calculate_vehicle_entry_load(struct veh_data *veh);
 extern void end_quest(struct char_data *ch, bool succeeded);
 extern void set_casting_pools(struct char_data *ch, int casting, int drain, int spell_defense, int reflection, bool message);
 extern void calc_weight(struct char_data *);
+extern void exdesc_conceal_reveal(struct char_data *vict, int wearloc, bool check_for_reveal);
 
 int get_skill_num_in_use_for_weapons(struct char_data *ch);
 int get_skill_dice_in_use_for_weapons(struct char_data *ch);
@@ -1006,7 +1007,7 @@ void affect_total(struct char_data * ch)
   // Apply gyromount penalties, but only if you're wielding a gun.
   // TODO: Ideally, this would only apply if you have uncompensated recoil, but that's a looot of code.
   struct obj_data *wielded = GET_EQ(ch, WEAR_WIELD);
-  if (wielded && GET_OBJ_TYPE(wielded) == ITEM_WEAPON && IS_GUN(GET_WEAPON_ATTACK_TYPE(wielded))) {
+  if (wielded && GET_OBJ_TYPE(wielded) == ITEM_WEAPON && WEAPON_IS_GUN(wielded)) {
     bool added_gyro_penalty = FALSE;
     for (i = 0; !added_gyro_penalty && i < NUM_WEARS; i++) {
       if (GET_EQ(ch, i) && GET_OBJ_TYPE(GET_EQ(ch, i)) == ITEM_GYRO) {
@@ -1192,7 +1193,7 @@ void affect_total(struct char_data * ch)
   struct obj_data *weapon = GET_EQ(ch, WEAR_WIELD);
   if (weapon && GET_OBJ_TYPE(weapon) == ITEM_WEAPON) {
     // Melee weapons grant reach according to their set stat.
-    if (!IS_GUN(GET_WEAPON_ATTACK_TYPE(weapon))) {
+    if (!WEAPON_IS_GUN(weapon)) {
       if (GET_WEAPON_REACH(weapon) > 0)
         GET_REACH(ch) += GET_WEAPON_REACH(weapon);
     }
@@ -1835,7 +1836,7 @@ void obj_from_cyberware(struct obj_data * cyber, bool recalc)
   }
 }
 
-bool equip_char(struct char_data * ch, struct obj_data * obj, int pos, bool recalc)
+bool equip_char(struct char_data * ch, struct obj_data * obj, int pos, bool recalc, bool print_hide_message)
 {
   int j;
 
@@ -1900,15 +1901,19 @@ bool equip_char(struct char_data * ch, struct obj_data * obj, int pos, bool reca
   }
 
   // Equipping is easy, just shadow it all.
-  if (ch->player_specials) {
-    GET_CHAR_COVERED_WEARLOCS(ch).SetBit(obj->worn_on);
+  if (ch->player_specials && !IS_OBJ_STAT(obj, ITEM_EXTRA_SHEER)) {
+    int wearloc = worn_on_to_wearloc[obj->worn_on];
+    if (print_hide_message && wearloc != ITEM_WEAR_WIELD) {
+      exdesc_conceal_reveal(ch, wearloc, false);
+    }
+    GET_CHAR_COVERED_WEARLOCS(ch).SetBit(wearloc);
   }
   
   calc_weight(ch);
   return TRUE;
 }
 
-struct obj_data *unequip_char(struct char_data * ch, int pos, bool focus, bool recalc)
+struct obj_data *unequip_char(struct char_data * ch, int pos, bool focus, bool recalc, bool print_reveal_message)
 {
   int j;
   struct obj_data *obj;
@@ -1924,8 +1929,12 @@ struct obj_data *unequip_char(struct char_data * ch, int pos, bool focus, bool r
   }
 
   // Remove the bit that this is worn on from our covered_wearlocs set.
-  if (ch->player_specials) {
-    GET_CHAR_COVERED_WEARLOCS(ch).RemoveBit(GET_EQ(ch, pos)->worn_on);
+  if (ch->player_specials && !IS_OBJ_STAT(GET_EQ(ch, pos), ITEM_EXTRA_SHEER)) {
+    int wearloc = worn_on_to_wearloc[GET_EQ(ch, pos)->worn_on];
+    if (print_reveal_message && wearloc != ITEM_WEAR_WIELD) {
+      exdesc_conceal_reveal(ch, wearloc, true);
+    }
+    GET_CHAR_COVERED_WEARLOCS(ch).RemoveBit(wearloc);
   }
 
   obj = GET_EQ(ch, pos);
@@ -3641,7 +3650,7 @@ int find_all_dots(char *arg, size_t arg_size)
 }
 
 #define DEFAULT_TO(skill_name) {if (!dice) {dice = GET_SKILL(ch, (skill_name)); defaulting = TRUE;}}
-int veh_skill(struct char_data *ch, struct veh_data *veh, int *tn)
+int veh_skill(struct char_data *ch, struct veh_data *veh, int *tn, bool include_control_pool)
 {
   int dice = 0;
 
@@ -3727,7 +3736,7 @@ int veh_skill(struct char_data *ch, struct veh_data *veh, int *tn)
     }
   }
 
-  if (AFF_FLAGGED(ch, AFF_RIG) || PLR_FLAGGED(ch, PLR_REMOTE))
+  if (include_control_pool && (AFF_FLAGGED(ch, AFF_RIG) || PLR_FLAGGED(ch, PLR_REMOTE)))
     dice += GET_CONTROL(ch);
 
   return dice;

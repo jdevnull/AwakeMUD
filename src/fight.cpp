@@ -78,6 +78,7 @@ bool damage_without_message(struct char_data *ch, struct char_data *victim, int 
 bool raw_damage(struct char_data *ch, struct char_data *victim, int dam, int attacktype, bool is_physical, bool send_message);
 void docwagon_retrieve(struct char_data *ch);
 void zero_out_magazine_counts(struct obj_data *obj, int max_ammo_remaining = 0);
+int get_vehicle_damage_modifier(struct veh_data *veh);
 
 SPECIAL(weapon_dominator);
 SPECIAL(pocket_sec);
@@ -507,6 +508,15 @@ void set_fighting(struct char_data * ch, struct veh_data * vict)
     combat_list = ch;
   }
 
+  {
+    struct obj_data *weap = GET_EQ(ch, WEAR_WIELD);
+    if (weap && GET_OBJ_TYPE(weap) == ITEM_WEAPON && WEAPON_IS_GUN(weap) && weap->contains) {
+      if (GET_MAGAZINE_AMMO_TYPE(weap->contains) == AMMO_AV) {
+        send_to_veh("^rYour threat indicators light up as hostile AV munitions come online.^n", vict, NULL, TRUE);
+      }
+    }
+  }
+
   FIGHTING_VEH(ch) = vict;
   GET_POS(ch) = POS_FIGHTING;
 
@@ -718,6 +728,7 @@ void make_corpse(struct char_data * ch)
 
         // If it's a gun from an NPC, track it in ammo metrics.
         if (IS_NPC(ch) && GET_OBJ_TYPE(o) == ITEM_WEAPON && WEAPON_IS_GUN(o) && o->contains && GET_OBJ_TYPE(o->contains) == ITEM_GUN_MAGAZINE && GET_MAGAZINE_AMMO_COUNT(o->contains) > 0) {
+          zero_out_magazine_counts(o, IS_NPC(ch) ? 1 : 0);
           AMMOTRACK_OK(GET_MAGAZINE_BONDED_ATTACKTYPE(o->contains), GET_MAGAZINE_AMMO_TYPE(o->contains), AMMOTRACK_NPC_SPAWNED, GET_MAGAZINE_AMMO_COUNT(o->contains));
         }
 
@@ -1212,7 +1223,7 @@ int calc_karma(struct char_data *ch, struct char_data *vict)
   if (weapon) {
     base += GET_WEAPON_POWER(weapon) * GET_WEAPON_DAMAGE_CODE(weapon);
 
-    if (IS_GUN(GET_WEAPON_ATTACK_TYPE(weapon))) {
+    if (WEAPON_IS_GUN(weapon)) {
       int rnum = real_mobile(GET_MOB_VNUM(vict));
       for (int index = 0; index < NUM_AMMOTYPES; index++) {
         if (GET_BULLETPANTS_AMMO_AMOUNT(&mob_proto[rnum], GET_WEAPON_ATTACK_TYPE(weapon), npc_ammo_usage_preferences[index]) > 0) {
@@ -1641,7 +1652,7 @@ void weapon_scatter(struct char_data *ch, struct char_data *victim, struct obj_d
         IS_SET(EXIT(victim, dir[i])->exit_info, EX_CLOSED))
       door += 2;
 
-  switch(GET_OBJ_VAL(weapon, 3))
+  switch(GET_WEAPON_ATTACK_TYPE(weapon))
   {
     case WEAP_SHOTGUN:
       snprintf(ammo_type, sizeof(ammo_type), "horde of pellets");
@@ -2873,8 +2884,7 @@ void gen_death_msg(struct char_data *ch, struct char_data *vict, int attacktype)
 }
 
 #define IS_RANGED(eq)   (GET_OBJ_TYPE(eq) == ITEM_FIREWEAPON || \
-(GET_OBJ_TYPE(eq) == ITEM_WEAPON && \
-(IS_GUN(GET_OBJ_VAL(eq, 3)))))
+(GET_OBJ_TYPE(eq) == ITEM_WEAPON && WEAPON_IS_GUN(eq)))
 
 #define RANGE_OK(ch) ((GET_EQ(ch, WEAR_WIELD) && GET_OBJ_TYPE(GET_EQ(ch, WEAR_WIELD)) == ITEM_WEAPON && \
 IS_RANGED(GET_EQ(ch, WEAR_WIELD))) || (GET_EQ(ch, WEAR_HOLD) && \
@@ -3785,7 +3795,7 @@ bool process_has_ammo(struct char_data *ch, struct obj_data *wielded, bool deduc
   } // End fireweapon code.
 
   // Check for guns. We can get here either with wielded or mounted guns.
-  if (GET_OBJ_TYPE(wielded) == ITEM_WEAPON && IS_GUN(GET_WEAPON_ATTACK_TYPE(wielded)))
+  if (GET_OBJ_TYPE(wielded) == ITEM_WEAPON && WEAPON_IS_GUN(wielded))
   {
     // First, check if they're manning a turret-- if they are, special handling is required.
     if (AFF_FLAGGED(ch, AFF_MANNING) || IS_RIGGING(ch))  {
@@ -5637,7 +5647,7 @@ void range_combat(struct char_data *ch, char *target, struct obj_data *weapon,
 
     act("$n aims $p and fires into the distance!", TRUE, ch, weapon, 0, TO_ROOM);
     act("You aim $p at $N and fire!", FALSE, ch, weapon, vict, TO_CHAR);
-    if (IS_GUN(GET_WEAPON_ATTACK_TYPE(weapon))) {
+    if (WEAPON_IS_GUN(weapon)) {
       if (has_ammo_no_deduct(ch, weapon)) {
         if (IS_NPC(vict) && !IS_PROJECT(vict) && !CH_IN_COMBAT(vict)) {
           GET_DODGE(vict) = GET_COMBAT_POOL(vict);
@@ -5796,7 +5806,7 @@ void range_combat(struct char_data *ch, char *target, struct obj_data *weapon,
       snprintf(buf, sizeof(buf), "You aim $p at the %s and fire!",
               fname(EXIT2(nextroom, dir)->keyword));
       act(buf, FALSE, ch, weapon, vict, TO_CHAR);
-      if (IS_GUN(GET_OBJ_VAL(weapon, 3)))
+      if (WEAPON_IS_GUN(weapon))
         if (!has_ammo(ch, weapon))
           return;
     }
@@ -6444,7 +6454,7 @@ void perform_violence(void)
       if (GET_EQ(ch, WEAR_WIELD)
           && GET_EQ(ch, WEAR_HOLD)
           && FIGHTING(ch)
-          && IS_GUN(GET_WEAPON_ATTACK_TYPE(GET_EQ(ch, WEAR_HOLD)))
+          && WEAPON_IS_GUN(GET_EQ(ch, WEAR_HOLD))
           && GET_WEAPON_ATTACK_TYPE(GET_EQ(ch, WEAR_HOLD)) != WEAP_TASER)
       {
         target_died = hit(ch,
@@ -6929,6 +6939,7 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
   char ammo_type[20];
   static struct obj_data *wielded = NULL;
   static int base_target, power, damage_total;
+  char rbuf[10000] = {0};
 
   int attack_success = 0, attack_resist=0, skill_total = 1;
   int recoil=0, burst=0, recoil_comp=0, newskill, modtarget = 0;
@@ -6957,9 +6968,17 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
     wielded = GET_EQ(ch, WEAR_WIELD);
   }
 
-  if (get_speed(veh) > 10 && !AFF_FLAGGED(ch, AFF_COUNTER_ATT) && ((!wielded || !IS_GUN(GET_OBJ_VAL(wielded, 3)))))
+  if (get_speed(veh) > 10 && !AFF_FLAGGED(ch, AFF_COUNTER_ATT) && ((!wielded || !WEAPON_IS_GUN(wielded))))
   {
     return vram(veh, ch, NULL);
+  }
+
+  struct char_data *driver = veh->rigger;
+  if (!driver) {
+    for (driver = veh->people; driver; driver = driver->next_in_veh) {
+      if (AFF_FLAGGED(driver, AFF_PILOT) || AFF_FLAGGED(driver, AFF_RIG))
+        break;
+    }
   }
 
   if (wielded) {
@@ -6992,31 +7011,65 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
         snprintf(ammo_type, sizeof(ammo_type), "bullet");
         break;
     }
-
-    // Deduct burstfire ammo. Note that one has already been deducted in has_ammo.
-    if (WEAPON_IS_BF(wielded) && wielded->contains && GET_OBJ_TYPE(wielded->contains) == ITEM_GUN_MAGAZINE) {
-      if (GET_MAGAZINE_AMMO_COUNT(wielded->contains) >= 2) {
-        burst = 3;
-        GET_MAGAZINE_AMMO_COUNT(wielded->contains) -= 2;
-        AMMOTRACK(ch, GET_MAGAZINE_BONDED_ATTACKTYPE(wielded->contains), GET_MAGAZINE_AMMO_TYPE(wielded->contains), AMMOTRACK_COMBAT, -2);
-      } else if (GET_MAGAZINE_AMMO_COUNT(wielded->contains) == 1) {
-        burst = 2;
-        GET_MAGAZINE_AMMO_COUNT(wielded->contains)--;
-        AMMOTRACK(ch, GET_MAGAZINE_BONDED_ATTACKTYPE(wielded->contains), GET_MAGAZINE_AMMO_TYPE(wielded->contains), AMMOTRACK_COMBAT, -1);
-      } else {
-        burst = 0;
-      }
+    if (WEAPON_IS_GUN(wielded) && wielded->contains && GET_MAGAZINE_AMMO_TYPE(wielded->contains) == AMMO_AV) {
+      strlcpy(ammo_type, "anti-vehicle munition", sizeof(ammo_type));
     }
 
-    if (IS_GUN(GET_WEAPON_ATTACK_TYPE(wielded))) {
-      power = GET_WEAPON_POWER(wielded) + burst;
+    damage_total = GET_WEAPON_DAMAGE_CODE(wielded);
+
+    if (WEAPON_IS_GUN(wielded)) {
+      power = GET_WEAPON_POWER(wielded);
       // AV does not halve, and we model this by doubling it.
       if (wielded->contains && GET_MAGAZINE_AMMO_TYPE(wielded->contains) == AMMO_AV) {
         using_av = TRUE;
       }
-    } else
+    } else {
       power = GET_STR(ch) + GET_WEAPON_STR_BONUS(wielded);
-    damage_total = GET_WEAPON_DAMAGE_CODE(wielded);
+    }
+
+    // Deduct burstfire ammo. Note that one has already been deducted in has_ammo. This DOESN'T modify power here, that's below.
+    if (wielded->contains && GET_OBJ_TYPE(wielded->contains) == ITEM_GUN_MAGAZINE) {
+      if (WEAPON_IS_FA(wielded)) {
+        burst = GET_WEAPON_FULL_AUTO_COUNT(wielded);
+      } else if (WEAPON_IS_BF(wielded)) {
+        burst = 3;
+      } else {
+        burst = 0;
+      }
+
+      if (burst) {
+        if (GET_MAGAZINE_AMMO_COUNT(wielded->contains) >= burst - 1) {
+          AMMOTRACK(ch, GET_MAGAZINE_BONDED_ATTACKTYPE(wielded->contains), GET_MAGAZINE_AMMO_TYPE(wielded->contains), AMMOTRACK_COMBAT, burst - 1);
+          GET_MAGAZINE_AMMO_COUNT(wielded->contains) -= burst - 1;
+        } else {
+          burst = GET_MAGAZINE_AMMO_COUNT(wielded->contains) + 1;
+          AMMOTRACK(ch, GET_MAGAZINE_BONDED_ATTACKTYPE(wielded->contains), GET_MAGAZINE_AMMO_TYPE(wielded->contains), AMMOTRACK_COMBAT, GET_MAGAZINE_AMMO_COUNT(wielded->contains));
+          GET_MAGAZINE_AMMO_COUNT(wielded->contains) = 0;
+        }
+      }
+
+      // Apply effects of ammo.
+      switch (GET_MAGAZINE_AMMO_TYPE(wielded->contains)) {
+        // AV is handled elsewhere.
+        case AMMO_EX:
+          power++;
+          // fall through
+        case AMMO_EXPLOSIVE:
+          power++;
+          break;
+        case AMMO_FLECHETTE:
+          // Houserule: Flechette vs vehicle /= 2.
+          power /= 2;
+          break;
+        case AMMO_HARMLESS:
+          power = 0;
+          break;
+        case AMMO_GEL:
+          // Gel rounds are -2 power.
+          power -= 2;
+          break;
+      }
+    }
   } else
   {
     power = GET_STR(ch);
@@ -7042,18 +7095,22 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
       damage_total = MODERATE;
   }
 
+  snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "before armor: %d%s. ", power, GET_SHORT_WOUND_NAME(damage_total));
   int armor_target;
   if (!using_av) {
     power = (int)(power / 2);
     damage_total--;
     armor_target = veh->armor;
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "non-AV ammo: power->%d, code->%s. ", power, GET_SHORT_WOUND_NAME(damage_total));
   } else {
     power -= (int) (veh->armor / 2);
     armor_target = (int) (veh->armor / 2);
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "AV ammo: power->%d (after removing 1/2 vehicle armor from it). ", power);
   }
 
-  if (power <= armor_target || !damage_total)
+  if (power <= armor_target || damage_total <= 0)
   {
+    act(rbuf, FALSE, ch, 0, 0, TO_ROLLS);
     snprintf(buf, sizeof(buf), "$n's %s ricochets off of %s.", ammo_type, GET_VEH_NAME(veh));
     snprintf(buf2, sizeof(buf2), "Your attack ricochets off of %s.", GET_VEH_NAME(veh));
     act(buf, FALSE, ch, NULL, NULL, TO_ROOM);
@@ -7072,8 +7129,19 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
     return FALSE;
   } else {
     // For AV rounds, this was subtracted before the armor check.
-    if (!using_av)
+    if (!using_av) {
       power -= veh->armor;
+    }
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "after armor subtract: power->%d. ", power);
+  }
+
+  if (wielded && WEAPON_IS_GUN(wielded)) {
+    if (burst > 0) {
+      snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "After armor: BF/FA: %d%s becomes ", power, GET_SHORT_WOUND_NAME(damage_total));
+      power += burst;
+      damage_total += (int)(burst / 3);
+      snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "%d%s. ", power, GET_SHORT_WOUND_NAME(damage_total));
+    }
   }
 
   if (wielded)
@@ -7091,37 +7159,54 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
       modtarget += 2;
     else if (get_speed(veh) >= 200)
       modtarget += 3;
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "movement target mod=%d; ", modtarget);
   }
-  if (wielded)
-    modtarget -= check_smartlink(ch, wielded);
-  if (wielded && IS_OBJ_STAT(wielded, ITEM_EXTRA_SNIPER) && ch->in_room == veh->in_room)
+  if (wielded) {
+    int smartlink_target = check_smartlink(ch, wielded);
+    if (smartlink_target) {
+      modtarget -= smartlink_target;
+      snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "smartlink target mod=%d; ", smartlink_target); 
+    }
+  }
+  if (wielded && IS_OBJ_STAT(wielded, ITEM_EXTRA_SNIPER) && ch->in_room == veh->in_room) {
     modtarget += SAME_ROOM_SNIPER_RIFLE_PENALTY;
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "sniper sameroom target mod=%d; ", SAME_ROOM_SNIPER_RIFLE_PENALTY); 
+  }
 
-  if (GET_EQ(ch, WEAR_WIELD) && GET_EQ(ch, WEAR_HOLD))
+  if (GET_EQ(ch, WEAR_WIELD) && GET_EQ(ch, WEAR_HOLD)) {
     modtarget++;
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "dualwield target mod=%d; ", 1); 
+  }
 
   if (AFF_FLAGGED(ch, AFF_MANNING) || IS_RIGGING(ch))
   {
     skill_total = get_skill(ch, SKILL_GUNNERY, base_target);
-  } else if (wielded && GET_SKILL(ch, GET_OBJ_VAL(wielded, 4)) < 1)
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "skill gunnery=%d; ", skill_total); 
+  } else if (wielded && GET_SKILL(ch, GET_WEAPON_SKILL(wielded)) < 1)
   {
-    newskill = return_general(GET_OBJ_VAL(wielded, 4));
+    newskill = return_general(GET_WEAPON_SKILL(wielded));
     skill_total = get_skill(ch, newskill, base_target);
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "skill %s=%d; ", skills[newskill].name, skill_total);
   } else if (!wielded)
   {
-    if (GET_SKILL(ch, SKILL_UNARMED_COMBAT) < 1) {
-      newskill = SKILL_UNARMED_COMBAT;
-      skill_total = get_skill(ch, newskill, base_target);
-    } else
-      skill_total = get_skill(ch, SKILL_UNARMED_COMBAT, base_target);
-  } else
-    skill_total = get_skill(ch, GET_OBJ_VAL(wielded, 4), base_target);
+    newskill = SKILL_UNARMED_COMBAT;
+    skill_total = get_skill(ch, newskill, base_target);
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "skill %s=%d; ", skills[newskill].name, skill_total);
+  } else {
+    newskill = GET_WEAPON_SKILL(wielded);
+    skill_total = get_skill(ch, newskill, base_target);
+    snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "skill %s=%d; ", skills[newskill].name, skill_total);
+  }
 
-  base_target = 4 + modtarget + recoil + modify_target(ch);
+  int modify_target_tn = modify_target(ch);
+  base_target = 4 + modtarget + recoil + modify_target_tn;
+  snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "base_target=4+%d+%d(rec)+%d; ", modtarget, recoil, modify_target_tn);
 
   attack_success = success_test(skill_total, base_target);
+  snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "rolled successes=%d; ", attack_success);
   if (attack_success < 1)
   {
+    act(rbuf, FALSE, ch, 0, 0, TO_ROLLS);
     if (wielded) {
       snprintf(buf, sizeof(buf), "$n fires his $o at %s, but misses.", GET_VEH_NAME(veh));
       snprintf(buf1, sizeof(buf1), "You fire your $o at %s, but miss.", GET_VEH_NAME(veh));
@@ -7137,33 +7222,55 @@ bool vcombat(struct char_data * ch, struct veh_data * veh)
     weapon_scatter(ch, ch, wielded);
     return FALSE;
   }
-  attack_resist = success_test(veh->body, power + get_vehicle_modifier(veh));
+#ifdef IS_BUILDPORT
+  int dummy_tn = 4;
+  int ch_skill = driver ? veh_skill(driver, veh, &dummy_tn, FALSE) : 0;
+  int veh_soak_dice = veh->body;
+  if (driver && (AFF_FLAGGED(driver, AFF_RIG) || PLR_FLAGGED(driver, PLR_REMOTE))) {
+    if (GET_CONTROL(driver) > ch_skill) {
+      veh_soak_dice += ch_skill;
+      snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "\r\nresist dice %d (control pool capped by skill=%d + veh->body=%d); ", veh_soak_dice, ch_skill, veh->body);
+    } else {
+      veh_soak_dice += GET_CONTROL(driver);
+      snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "\r\nresist dice %d (control pool %d + veh->body=%d); ", veh_soak_dice, GET_CONTROL(driver), veh->body);
+    }
+  }
+  
+#else
+  int veh_soak_dice = veh->body;
+  snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "\r\nresist dice %d (veh->body=%d); ", veh_soak_dice, veh->body);
+#endif
+  int resist_tn = power + get_vehicle_damage_modifier(veh);
+  attack_resist = success_test(veh_soak_dice, resist_tn);
   attack_success -= attack_resist;
+  snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "resist vs TN %d, got %d successes so %d net for attacker. ", resist_tn, attack_resist, attack_success);
 
   int staged_damage = stage(attack_success, damage_total);
   damage_total = convert_damage(staged_damage);
+  snprintf(ENDOF(rbuf), sizeof(rbuf) - strlen(rbuf), "Dmg staged to %s (%d boxes). ", GET_WOUND_NAME(staged_damage), damage_total);
+  act(rbuf, FALSE, ch, 0, 0, TO_ROLLS);
 
-  if (damage_total < LIGHT)
+  if (staged_damage < LIGHT)
   {
     snprintf(buf, sizeof(buf), "$n's %s ricochets off of %s.", ammo_type, GET_VEH_NAME(veh));
     snprintf(buf1, sizeof(buf1), "Your attack ricochets off of %s.", GET_VEH_NAME(veh));
     snprintf(buf2, sizeof(buf2), "A %s ricochets off of your ride.\r\n", ammo_type);
-  } else if (damage_total == LIGHT)
+  } else if (staged_damage == LIGHT)
   {
     snprintf(buf, sizeof(buf), "$n's %s causes extensive damage to %s paintwork.", ammo_type, GET_VEH_NAME(veh));
     snprintf(buf1, sizeof(buf1), "Your attack causes extensive damage to %s paintwork.", GET_VEH_NAME(veh));
     snprintf(buf2, sizeof(buf2), "A %s scratches your paintjob.\r\n", ammo_type);
-  } else if (damage_total == MODERATE)
+  } else if (staged_damage == MODERATE)
   {
     snprintf(buf, sizeof(buf), "$n's %s leaves %s riddled with holes.", ammo_type, GET_VEH_NAME(veh));
     snprintf(buf1, sizeof(buf1), "Your attack leave %s riddled with holes.", GET_VEH_NAME(veh));
     snprintf(buf2, sizeof(buf2), "A %s leaves your ride full of holes.\r\n", ammo_type);
-  } else if (damage_total == SERIOUS)
+  } else if (staged_damage == SERIOUS)
   {
     snprintf(buf, sizeof(buf), "$n's %s obliterates %s.", ammo_type, GET_VEH_NAME(veh));
     snprintf(buf1, sizeof(buf1), "You obliterate %s with your attack.", GET_VEH_NAME(veh));
     snprintf(buf2, sizeof(buf2), "A %s obliterates your ride.\r\n", ammo_type);
-  } else if (damage_total >= DEADLY)
+  } else if (staged_damage >= DEADLY)
   {
     snprintf(buf, sizeof(buf), "$n's %s completely destroys %s.", ammo_type, GET_VEH_NAME(veh));
     snprintf(buf1, sizeof(buf1), "Your attack completely destroys %s.", GET_VEH_NAME(veh));
